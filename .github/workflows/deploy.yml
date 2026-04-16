@@ -9,28 +9,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Trigger Render Deploy
+        uses: render-eco/action@v1
         with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run tests
-        run: python -m pytest tests/test_app.py -v
-
-      - name: Deploy to Render
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-        run: |
-          curl -s -X POST "https://api.render.com/v1/blueprints" \
-            -H "Authorization: Bearer $RENDER_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "serviceType": "web",
+          apiKey: ${{ secrets.RENDER_API_KEY }}
+          services: |
+            {
+              "type": "web",
               "name": "rent-finder",
               "repo": "https://github.com/scbrock/rent-finder-flask",
               "branch": "clean_build",
@@ -40,4 +25,4 @@ jobs:
               "envVars": [
                 {"key": "PORT", "value": "10000"}
               ]
-            }'
+            }
