@@ -122,6 +122,46 @@ def scrape_zumper(pages=3) -> pd.DataFrame:
     return pd.DataFrame(listings)
 
 
+def _clamp_beds(v: float) -> int:
+    """Clamp beds to valid range 0-10, treating 0 as studio."""
+    v = int(v)
+    if v < 0:
+        return 0
+    if v > 10:
+        return 0  # garbled value like "12980286bed" → treat as unknown
+    return v
+
+
+def _clamp_baths(v: float) -> float:
+    """Clamp baths to valid range 0-6 (realistic bathroom counts).
+    Rejects garbage like 2.51, 11, 21 extracted from prices/addresses."""
+    v = float(v)
+    if v < 0.5 or v > 6:
+        return 0
+    return round(v, 1)
+
+
+def _save_raw(listings, date_str: str):
+    """Save raw scraped listings to rent_finder/data/raw_YYYY-MM-DD.json."""
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"raw_{date_str}.json")
+    data = [{
+        "listing_id": lst.listing_id,
+        "title": lst.title,
+        "price": lst.price,
+        "price_str": lst.price_str,
+        "location": lst.location,
+        "beds_raw": lst.beds,
+        "baths_raw": lst.baths,
+        "url": lst.url,
+        "image_url": lst.image_url,
+    } for lst in listings]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"  Raw listings saved: {path}")
+
+
 def scrape_kijiji(pages=5) -> pd.DataFrame:
     """
     Scrape Toronto rental listings from Kijiji.
@@ -131,21 +171,29 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
     import re as _re
 
     all_listings = []
+    date_str = datetime.now().strftime("%Y-%m-%d")
     try:
         listings = _kj.scrape(pages=pages)
         print(f"  Kijiji: got {len(listings)} total listings")
+        # Save raw listings BEFORE any processing (AC3)
+        _save_raw(listings, date_str)
         for lst in listings:
             # Parse beds/baths from text fields like "2 bedbd" or "002 BEDbd"
             beds_raw = lst.beds or ""
             baths_raw = lst.baths or ""
-            try:
-                beds = min(10, int(_re.search(r"\d+", beds_raw).group())) if _re.search(r"\d+", beds_raw) else 0
-            except Exception:
-                beds = 0
-            try:
-                baths = min(10, float(_re.search(r"\d+(?:\.\d+)?", baths_raw).group())) if _re.search(r"\d+(?:\.\d+)?", baths_raw) else 0
-            except Exception:
-                baths = 0
+            # Validate extracted numbers are in sane range
+            beds_num = 0
+            if _re.search(r"\d+", beds_raw):
+                try:
+                    beds_num = _clamp_beds(float(_re.search(r"\d+", beds_raw).group()))
+                except (ValueError, AttributeError):
+                    beds_num = 0
+            baths_num = 0.0
+            if _re.search(r"\d+(?:\.\d+)?", baths_raw):
+                try:
+                    baths_num = _clamp_baths(float(_re.search(r"\d+(?:\.\d+)?", baths_raw).group()))
+                except (ValueError, AttributeError):
+                    baths_num = 0.0
 
             # Neighborhood = location part before first comma, or full location
             neighborhood = lst.location.split(",")[0].strip() if lst.location else "Toronto"
@@ -153,8 +201,8 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
             all_listings.append({
                 "source": "Kijiji",
                 "price": int(lst.price),
-                "beds": beds,
-                "baths": baths,
+                "beds": beds_num,
+                "baths": baths_num,
                 "sqft": None,
                 "neighborhood": neighborhood[:60],
                 "days_ago": 5,  # HTML cards don't expose listing age; conservative default

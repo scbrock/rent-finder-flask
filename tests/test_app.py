@@ -34,10 +34,11 @@ def test_api_deals_returns_list():
     assert isinstance(deals, list)
 
 
-def test_api_deals_returns_55():
+def test_api_deals_returns_min_listings():
+    """Pipeline success gate: >= 50 fresh listings required per run (AC1)."""
     resp = client.get('/api/deals')
     deals = resp.get_json()
-    assert len(deals) == 55
+    assert len(deals) >= 50, f"Expected >= 50 listings, got {len(deals)}"
 
 
 def test_csv_exists():
