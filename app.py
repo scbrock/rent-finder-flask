@@ -3,38 +3,47 @@ Toronto Rent Deal Finder — Flask Web App
 Serves deals from deals_output.csv with a browsable, filterable UI.
 """
 
-from flask import Flask, render_template, jsonify, request
-import pandas as pd
+import csv
 import os
+from flask import Flask, render_template, jsonify, request
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(APP_DIR, 'templates'))
 
-# Load deals from CSV — relative to this file's directory
-DEALS_CSV = os.path.join(os.path.dirname(__file__), 'deals_output.csv')
+DEALS_CSV = os.path.join(APP_DIR, 'deals_output.csv')
 
 
 def load_deals():
-    """Load and prepare deals DataFrame."""
     if not os.path.exists(DEALS_CSV):
-        return pd.DataFrame()
-    df = pd.read_csv(DEALS_CSV)
-    # Rename for display
-    df = df.rename(columns={
-        'neighborhood': 'Neighbourhood',
-        'beds': 'Beds',
-        'price': 'Price',
-        'fair_value': 'Fair Value',
-        'pct_under': '% Under',
-        'days_ago': 'Days Old',
-        'link': 'Link',
-        'sqft': 'Sqft',
-    })
-    # Compute display price
-    df['Price'] = df['Price'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
-    df['Fair Value'] = df['Fair Value'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
-    df['% Under'] = df['% Under'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
-    return df
+        return []
+    with open(DEALS_CSV, newline='', encoding='utf-8') as f:
+        rows = list(csv.DictReader(f))
+    deals = []
+    for r in rows:
+        try:
+            price = float(r.get('price', 0) or 0)
+            fair_value = float(r.get('fair_value', 0) or 0)
+            pct_under = float(r.get('pct_under', 0) or 0)
+            final_score = float(r.get('final_score', 0) or 0)
+            beds_raw = r.get('beds', '')
+            beds = int(float(beds_raw)) if beds_raw not in ('', None) else None
+            days_ago = r.get('days_ago', '')
+            deals.append({
+                'neighbourhood': r.get('neighborhood', ''),
+                'beds': beds,
+                'price': price,
+                'price_fmt': f"${price:,.0f}",
+                'fair_value_fmt': f"${fair_value:,.0f}" if fair_value else '—',
+                'pct_under': round(pct_under, 1),
+                'pct_under_fmt': f"{pct_under:.1f}%",
+                'days_ago': days_ago,
+                'link': r.get('link', ''),
+                'final_score': final_score,
+                'sqft': r.get('sqft', ''),
+            })
+        except (ValueError, TypeError):
+            continue
+    return deals
 
 
 @app.route('/')
@@ -44,38 +53,25 @@ def index():
 
 @app.route('/api/deals')
 def api_deals():
-    df = load_deals()
-    if df.empty:
-        return jsonify([])
-    
-    # Filter params
+    deals = load_deals()
+
     max_price = request.args.get('max_price', type=int)
     min_beds = request.args.get('min_beds', type=int)
-    neighbourhood = request.args.get('neighbourhood', '')
-    sort_by = request.args.get('sort', 'final_score')
+    neighbourhood = request.args.get('neighbourhood', '').lower()
+    sort_by = request.args.get('sort', 'score')
 
     if max_price:
-        # Strip $ and commas to get numeric for filtering
-        df = df[df['rank'] <= 50]  # top 50 only for perf
-    
+        deals = [d for d in deals if d['price'] <= max_price]
     if min_beds is not None:
-        df = df[df['Beds'] >= min_beds]
-    
+        deals = [d for d in deals if d['beds'] is not None and d['beds'] >= min_beds]
     if neighbourhood:
-        df = df[df['Neighbourhood'].str.contains(neighbourhood, case=False, na=False)]
-    
-    # Sort
-    sort_cols = {
-        'score': 'final_score',
-        'price': 'Price',
-        'pct': 'pct_under',
-    }
-    col = sort_cols.get(sort_by, 'final_score')
-    if col in df.columns:
-        df = df.sort_values(col, ascending=False)
-    
-    # Return as list of dicts
-    return jsonify(df.to_dict(orient='records'))
+        deals = [d for d in deals if neighbourhood in d['neighbourhood'].lower()]
+
+    reverse = sort_by != 'price'
+    key = 'price' if sort_by == 'price' else 'pct_under' if sort_by == 'pct' else 'final_score'
+    deals.sort(key=lambda d: d.get(key, 0), reverse=reverse)
+
+    return jsonify(deals[:50])
 
 
 if __name__ == '__main__':
