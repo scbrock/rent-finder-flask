@@ -13,7 +13,7 @@
 | 2026-04-16 | Step 1 attempt | Built pipeline (scraper → scoring → CSV output) | 60 SYNTHETIC | 13 | Queen West 2BR $2,200 (+19.3%) | INVALID — all sample data. Zumper JS-blocked, Kijiji returned 0. |
 | 2026-04-16 (AM) | Step 1–3 + Discord | Kijiji 5 pages → 210 raw, 63 deduped after price filter. Scoring working. Discord post attempted but bot token missing. | 63 LIVE | 2 | Toronto 1BR $1,400 (+23.3%) | Same top deal. 2/63 deals under market — low rate due to stale listings (many 60d old). |
 | 2026-04-16 (PM) | Step 4 — COMPLETE | Daily cron scheduled at 7 AM ET. Pipeline fully working. Discord posting confirmed with --account carl. | 55 LIVE | 11 | High Park-Swansea 0BR $1,700 (+21.8%) | Daily cron (id: bcd13b45) fires at 11:00 UTC / 7 AM ET. |
-| 2026-04-16 (PM) | Step 5 — IN PROGRESS | Flask web app built (app.py + templates/index.html). 10/10 tests pass. Files: app.py, templates/index.html, requirements.txt, Procfile. Next: deploy to Railway. | — | — | — | MC-277 in_progress (deploy to Railway) |
+| 2026-04-17 | MC-249 — COMPLETE | `--region` CLI flag added to find_deals.py (argparse). All 6 Toronto regions tested + empty-region guards. CSV region column confirmed. 10/10 tests pass. | 63 LIVE | varies | region-filtered | All regions: Downtown 31, East End 5, West End 11, North York 8, Etobicoke 1, Scarborough 2. Empty-region (0 deals) handled with ZeroDivisionError guard. |
 
 ---
 

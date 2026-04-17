@@ -14,6 +14,8 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+load_dotenv()
 
 
 def parse_args():
@@ -23,6 +25,20 @@ def parse_args():
         choices=["Downtown", "East End", "West End", "North York", "Etobicoke", "Scarborough"],
         default=None,
         help="Filter results to a specific Toronto region",
+    )
+    parser.add_argument(
+        "--max-commute",
+        type=int,
+        default=None,
+        dest="max_commute",
+        help="Maximum commute time in minutes from destination",
+    )
+    parser.add_argument(
+        "--destination",
+        type=str,
+        default=None,
+        dest="destination",
+        help="Destination address for commute calculation (e.g. 'Union Station, Toronto')",
     )
     return parser.parse_args()
 
@@ -331,16 +347,150 @@ def score_deals(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── Commute Time (OpenRouteService + Nominatim fallback) ───────────────────────
+
+# Known destination shortcuts (avoid API calls for common Toronto locations)
+KNOWN_DESTINATIONS = {
+    "union station": (43.6455, -79.3833),
+    "union station, toronto": (43.6455, -79.3833),
+    "toronto union station": (43.6455, -79.3833),
+    "king station": (43.6475, -79.3791),
+    "billy bishop airport": (43.6275, -79.0951),
+    "st. michael's hospital": (43.6547, -79.3737),
+    "sick kids hospital": (43.6537, -79.3903),
+    "u of t": (43.6629, -79.3958),
+    "ryerson university": (43.6577, -79.3833),
+    "yonge and bay": (43.6707, -79.3864),
+    "yonge and dundas": (43.6561, -79.3802),
+}
+
+
+def geocode_address(address: str, api_key: str) -> tuple:
+    """
+    Geocode an address string to (lat, lon) using Nominatim (no API key needed)
+    and/or OpenRouteService. Returns None on failure.
+    """
+    addr_lower = address.lower().strip()
+    if addr_lower in KNOWN_DESTINATIONS:
+        return KNOWN_DESTINATIONS[addr_lower]
+
+    # Try Nominatim first (no key required, rate-limited to 1/sec)
+    try:
+        import time
+        time.sleep(1.1)  # Respect Nominatim rate limit
+        nom_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": address + ", Toronto, ON",
+            "format": "json",
+            "limit": "1",
+            "accept-language": "en",
+        }
+        headers = {"User-Agent": "RentFinderBot/1.0 (toronto-rent-deals)"}
+        resp = requests.get(nom_url, params=params, headers=headers, timeout=15)
+        data = resp.json()
+        if data:
+            return (float(data[0]["lat"]), float(data[0]["lon"]))
+    except Exception:
+        pass
+
+    # Fallback: ORS geocoding
+    try:
+        url = "https://api.openrouteservice.org/geocode/v1/search"
+        headers = {"Authorization": api_key}
+        params = {
+            "text": address,
+            "size": 1,
+            "lang": "en",
+            "filters": {"place_type": "locality", "locality": "Toronto"},
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        data = resp.json()
+        if data.get("features"):
+            coords = data["features"][0]["geometry"]["coordinates"]
+            return (coords[1], coords[0])
+    except Exception:
+        pass
+
+    return None
+
+
+def compute_commute_times(df: pd.DataFrame, dest_lat: float, dest_lon: float,
+                          api_key: str, profile: str = "foot-walking") -> pd.DataFrame:
+    """
+    Compute walking commute time (minutes) from each listing's neighbourhood
+    centroid to dest_lat/dest_lon using OpenRouteService or Haversine fallback.
+    Adds 'commute_minutes' column to df.
+    """
+    from neighbourhood_coords import neighbourhood_centroid
+    import math, time
+
+    # Try ORS directions; on failure fall back to Haversine estimate
+    use_ors = bool(api_key)
+    if use_ors:
+        try:
+            # Quick ORS auth check
+            test_url = f"https://api.openrouteservice.org/v2/directions/{profile}"
+            test_resp = requests.get(
+                test_url,
+                headers={"Authorization": api_key},
+                params={"start": "-79.3835,43.6515", "end": "-79.3835,43.6515"},
+                timeout=10,
+            )
+            use_ors = test_resp.status_code != 401
+        except Exception:
+            use_ors = False
+
+    commute_mins = []
+    for _, row in df.iterrows():
+        centroid = neighbourhood_centroid(str(row.get("neighborhood", "")))
+        if centroid is None:
+            centroid = (43.6515, -79.3835)
+        src_lat, src_lon = centroid
+
+        if use_ors:
+            try:
+                url = f"https://api.openrouteservice.org/v2/directions/{profile}"
+                params = {"start": f"{src_lon},{src_lat}", "end": f"{dest_lon},{dest_lat}"}
+                resp = requests.get(url, headers={"Authorization": api_key}, params=params, timeout=15)
+                data = resp.json()
+                if data.get("routes"):
+                    duration_sec = data["routes"][0]["summary"]["duration"]
+                    commute_mins.append(round(duration_sec / 60, 1))
+                    time.sleep(1.1)  # Rate limit
+                    continue
+            except Exception:
+                pass
+
+        # Haversine fallback: straight-line / 5 km/h walking
+        R = 6371
+        dlat = math.radians(dest_lat - src_lat)
+        dlon = math.radians(dest_lon - src_lon)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(src_lat)) * math.cos(math.radians(dest_lat)) *
+             math.sin(dlon / 2) ** 2)
+        dist_km = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        est_mins = round(dist_km / 5 * 60, 1)
+        commute_mins.append(est_mins)
+
+    df = df.copy()
+    df["commute_minutes"] = commute_mins
+    return df
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     args = parse_args()
     region_filter = args.region
+    max_commute = args.max_commute
+    destination = args.destination
 
     print("=" * 80)
     print("  TORONTO RENTAL DEAL FINDER -- MC-245")
     if region_filter:
         print(f"  Region filter: {region_filter}")
+    if destination:
+        print(f"  Destination: {destination}")
     print("=" * 80)
     print()
 
@@ -432,21 +582,44 @@ def main():
     from region_map import neighbourhood_to_region
     scored["region"] = scored["neighborhood"].apply(neighbourhood_to_region)
 
+    # Compute commute times if destination provided
+    if destination and max_commute:
+        print()
+        print(f"  Computing commute times to '{destination}'...")
+        api_key = os.environ.get("ORS_API_KEY", "")
+        if api_key:
+            dest_coords = geocode_address(destination, api_key)
+            if dest_coords:
+                dest_lat, dest_lon = dest_coords
+                scored = compute_commute_times(scored, dest_lat, dest_lon, api_key)
+                print(f"  Commute times computed for {scored['commute_minutes'].notna().sum()} listings.")
+            else:
+                print("  Geocoding destination failed — skipping commute filter.")
+        else:
+            print("  ORS_API_KEY not set — skipping commute computation.")
+
     # Apply region filter if specified
     if region_filter:
         scored = scored[scored["region"] == region_filter].reset_index(drop=True)
         scored["rank"] = range(1, len(scored) + 1)
+
+    # Apply max commute filter if specified
+    if destination and max_commute and "commute_minutes" in scored.columns:
+        before = len(scored)
+        scored = scored[scored["commute_minutes"].notna() & (scored["commute_minutes"] <= max_commute)].reset_index(drop=True)
+        scored["rank"] = range(1, len(scored) + 1)
+        print(f"  Commute filter ({max_commute} min): {before} -> {len(scored)} listings")
 
     top = scored.head(10).copy()
     top["fair_value"] = top["fair_value"].round(0).astype(int)
     top["pct_under"] = top["pct_under"].round(1)
     top["final_score"] = top["final_score"].round(3)
 
-    print(f"  {'#':<3} {'Price':>8} {'Fair':>8} {'Under':>7} {'Neighborhood':<30} {'Bd':>3} {'Region':<12} {'Score':>6}  Link")
-    print("  " + "-" * 135)
+    # Build output line with commute if available
     for _, row in top.iterrows():
         sqft_str = f"{row['sqft']:,}" if pd.notna(row["sqft"]) else "-"
-        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12} {row['final_score']:>6.3f}  {row['link'][:55]}")
+        comm_str = f" | {row['commute_minutes']:.0f}min" if pd.notna(row.get("commute_minutes")) else ""
+        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12}{comm_str} {row['final_score']:>6.3f}  {row['link'][:55]}")
 
     # Save
     out_dir = os.path.dirname(os.path.abspath(__file__))
