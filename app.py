@@ -3,8 +3,7 @@ Toronto Rent Deal Finder — Flask Web App
 Serves deals from deals_output.csv with a browsable, filterable UI.
 """
 
-import csv
-import os
+import csv, os
 from flask import Flask, render_template, jsonify, request
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,20 +26,25 @@ def load_deals():
             final_score = float(r.get('final_score', 0) or 0)
             beds_raw = r.get('beds', '')
             beds = int(float(beds_raw)) if beds_raw not in ('', None) else None
-            days_ago = r.get('days_ago', '')
+            baths_raw = r.get('baths', '')
+            baths = float(baths_raw) if baths_raw not in ('', None) else None
+            price_fmt = f"${price:,.0f}"
+            fair_fmt = f"${fair_value:,.0f}" if fair_value else '—'
             deals.append({
                 'neighbourhood': r.get('neighborhood', ''),
                 'region': r.get('region', ''),
                 'beds': beds,
+                'baths': baths,
+                'has_parking': r.get('has_parking', '').strip().lower() in ('true', '1', 'yes') if r.get('has_parking', '') else None,
                 'price': price,
-                'price_fmt': f"${price:,.0f}",
-                'fair_value_fmt': f"${fair_value:,.0f}" if fair_value else '—',
+                'price_fmt': price_fmt,
+                'fair_value_fmt': fair_fmt,
                 'pct_under': round(pct_under, 1),
                 'pct_under_fmt': f"{pct_under:.1f}%",
-                'days_ago': days_ago,
+                'days_ago': r.get('days_ago', ''),
+                'is_stale': r.get('is_stale', '').strip().lower() in ('true', '1'),
                 'link': r.get('link', ''),
-                'final_score': final_score,
-                'sqft': r.get('sqft', ''),
+                'final_score': round(final_score, 3) if final_score else 0,
             })
         except (ValueError, TypeError):
             continue
@@ -56,26 +60,75 @@ def index():
 def api_deals():
     deals = load_deals()
 
-    max_price = request.args.get('max_price', type=int)
-    min_beds = request.args.get('min_beds', type=int)
-    neighbourhood = request.args.get('neighbourhood', '').lower()
+    # Parse filter params
+    beds_min = request.args.get('beds_min', type=int)
+    beds_max = request.args.get('beds_max', type=int)
+    baths_min = request.args.get('baths_min', type=int)
+    parking = request.args.get('parking', type=lambda v: v.lower() == 'true' if v else None)
+    price_min = request.args.get('price_min', type=int)
+    price_max = request.args.get('price_max', type=int)
+    neighbourhood = request.args.get('neighbourhood', '').strip().lower()
     region = request.args.get('region', '').strip()
     sort_by = request.args.get('sort', 'score')
+    max_commute = request.args.get('max_commute', type=int)
+    commute_dest = request.args.get('commute_dest', '').strip()
 
-    if max_price:
-        deals = [d for d in deals if d['price'] <= max_price]
-    if min_beds is not None:
-        deals = [d for d in deals if d['beds'] is not None and d['beds'] >= min_beds]
+    # Apply filters
+    if beds_min is not None:
+        deals = [d for d in deals if d['beds'] is not None and d['beds'] >= beds_min]
+    if beds_max is not None:
+        deals = [d for d in deals if d['beds'] is not None and d['beds'] <= beds_max]
+    if baths_min is not None:
+        deals = [d for d in deals if d['baths'] is not None and d['baths'] >= baths_min]
+    if parking is True:
+        deals = [d for d in deals if d['has_parking'] is True]
+    if price_min is not None:
+        deals = [d for d in deals if d['price'] >= price_min]
+    if price_max is not None:
+        deals = [d for d in deals if d['price'] <= price_max]
     if neighbourhood:
         deals = [d for d in deals if neighbourhood in d['neighbourhood'].lower()]
     if region:
         deals = [d for d in deals if d.get('region', '') == region]
+    if max_commute is not None:
+        deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
+        deals.sort(key=lambda d: d.get('commute_minutes', 999))
+        return jsonify(deals[:50])
 
-    reverse = sort_by != 'price'
-    key = 'price' if sort_by == 'price' else 'pct_under' if sort_by == 'pct' else 'final_score'
-    deals.sort(key=lambda d: d.get(key, 0), reverse=reverse)
+    # Sort
+    reverse = sort_by not in ('price', 'days_ago')
+    key_map = {
+        'price': 'price',
+        'pct': 'pct_under',
+        'score': 'final_score',
+        'beds': 'beds',
+        'baths': 'baths',
+        'days_ago': 'days_ago',
+    }
+    key = key_map.get(sort_by, 'final_score')
+    deals.sort(key=lambda d: d.get(key, 0) if isinstance(d.get(key), (int, float)) else 0, reverse=reverse)
 
     return jsonify(deals[:50])
+
+
+@app.route('/api/meta')
+def api_meta():
+    """Return min/max ranges derived from actual data for UI slider construction."""
+    deals = load_deals()
+    if not deals:
+        return jsonify({'beds': [], 'price': [0, 0], 'baths': [], 'regions': []})
+
+    beds_vals = sorted(set(d['beds'] for d in deals if d['beds'] is not None))
+    price_vals = [min(d['price'] for d in deals), max(d['price'] for d in deals)]
+    baths_vals = sorted(set(d['baths'] for d in deals if d['baths'] is not None))
+    regions = sorted(set(d.get('region', '') for d in deals if d.get('region', '')))
+
+    return jsonify({
+        'beds': beds_vals,
+        'price': [int(price_vals[0]), int(price_vals[1])],
+        'baths': baths_vals,
+        'regions': regions,
+    })
 
 
 if __name__ == '__main__':

@@ -7,47 +7,79 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
-    header { background: #2d6a4f; color: white; padding: 24px; border-radius: 8px; margin-bottom: 20px; }
-    header h1 { font-size: 1.6rem; font-weight: 700; }
-    header p { margin-top: 6px; opacity: 0.85; font-size: 0.9rem; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+    header { background: #2d6a4f; color: white; padding: 20px 24px; border-radius: 8px; margin-bottom: 16px; }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header p { margin-top: 4px; opacity: 0.85; font-size: 0.85rem; }
 
-    .filters { background: white; padding: 16px; border-radius: 8px; margin-bottom: 16px;
-               display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .filters label { font-weight: 600; font-size: 0.85rem; }
-    .filters select, .filters input { padding: 7px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.9rem; }
-    .filters button { padding: 8px 16px; background: #2d6a4f; color: white; border: none;
-                      border-radius: 5px; cursor: pointer; font-weight: 600; }
-    .filters button:hover { background: #1b4332; }
+    /* ── Filters ── */
+    .filters { background: white; padding: 14px 16px; border-radius: 8px; margin-bottom: 14px;
+               display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .filters .filter-group { display: flex; flex-direction: column; gap: 3px; }
+    .filters label { font-size: 0.75rem; font-weight: 600; color: #555; }
+    .filters select, .filters input[type="range"] {
+      padding: 6px 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.85rem;
+    }
+    .filter-badge {
+      background: #e74c3c; color: white; font-size: 0.7rem; font-weight: 700;
+      padding: 1px 6px; border-radius: 10px; margin-left: 4px; vertical-align: middle;
+      display: none;
+    }
+    .filter-badge.active { display: inline; }
+    .parking-toggle {
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+      padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.85rem;
+      background: white; user-select: none;
+    }
+    .parking-toggle input { cursor: pointer; }
+    .parking-toggle.active { background: #e8f5e9; border-color: #2d6a4f; color: #2d6a4f; }
+    .price-range-wrap { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #555; }
+    #price_min, #price_max { width: 80px; }
+    #filter_apply {
+      padding: 7px 16px; background: #2d6a4f; color: white; border: none;
+      border-radius: 5px; cursor: pointer; font-weight: 600; font-size: 0.85rem;
+    }
+    #filter_apply:hover { background: #1b4332; }
+    #filter_reset {
+      padding: 7px 12px; background: #ccc; color: #333; border: none;
+      border-radius: 5px; cursor: pointer; font-size: 0.8rem;
+    }
+    #filter_reset:hover { background: #bbb; }
 
-    .stats { display: flex; gap: 16px; margin-bottom: 16px; }
-    .stat-card { background: white; padding: 14px 18px; border-radius: 8px; flex: 1; text-align: center; }
-    .stat-card .value { font-size: 1.8rem; font-weight: 700; color: #2d6a4f; }
-    .stat-card .label { font-size: 0.8rem; color: #666; margin-top: 4px; }
+    /* ── Stats ── */
+    .stats { display: flex; gap: 12px; margin-bottom: 14px; }
+    .stat-card { background: white; padding: 12px 16px; border-radius: 8px; flex: 1; text-align: center; }
+    .stat-card .value { font-size: 1.5rem; font-weight: 700; color: #2d6a4f; }
+    .stat-card .label { font-size: 0.75rem; color: #666; margin-top: 3px; }
 
-    table { background: white; border-radius: 8px; overflow: hidden; width: 100%; border-collapse: collapse; }
-    th { background: #52b788; color: white; padding: 12px 14px; text-align: left; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+    /* ── Table ── */
+    table { background: white; border-radius: 8px; overflow: hidden; width: 100%;
+            border-collapse: collapse; }
+    th { background: #52b788; color: white; padding: 10px 12px; text-align: left;
+         font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
     th:hover { background: #40916c; }
-    td { padding: 11px 14px; font-size: 0.9rem; border-bottom: 1px solid #eee; }
+    td { padding: 9px 12px; font-size: 0.85rem; border-bottom: 1px solid #eee; }
     tr:hover { background: #f0faf4; }
     tr:last-child td { border-bottom: none; }
 
-    .deal-badge { background: #d4edda; color: #155724; padding: 2px 8px; border-radius: 12px;
-                  font-size: 0.75rem; font-weight: 700; }
     .pct-good { color: #2d6a4f; font-weight: 700; }
     .pct-mid { color: #b56b00; }
     .pct-bad { color: #999; }
-    .link-btn { display: inline-block; padding: 4px 10px; background: #40916c; color: white;
-                border-radius: 4px; text-decoration: none; font-size: 0.8rem; font-weight: 600; }
+    .stale-tag { background: #fff3cd; color: #856404; padding: 1px 6px; border-radius: 8px;
+                 font-size: 0.7rem; font-weight: 600; }
+    .parking-icon { color: #2d6a4f; font-size: 0.9rem; }
+    .link-btn { display: inline-block; padding: 3px 9px; background: #40916c; color: white;
+                border-radius: 4px; text-decoration: none; font-size: 0.75rem; font-weight: 600; }
     .link-btn:hover { background: #2d6a4f; }
 
     .no-deals { text-align: center; padding: 40px; color: #888; }
     .loading { text-align: center; padding: 30px; color: #888; }
 
-    @media (max-width: 600px) {
+    @media (max-width: 700px) {
       .filters { flex-direction: column; }
-      table { font-size: 0.8rem; }
-      th, td { padding: 8px 10px; }
+      table { font-size: 0.78rem; }
+      th, td { padding: 7px 8px; }
+      .stats { flex-direction: column; }
     }
   </style>
 </head>
@@ -55,54 +87,93 @@
 <div class="container">
   <header>
     <h1>🏠 Toronto Rent Deals</h1>
-    <p>Listings priced below market — scraped daily from Kijiji. Updated 7 AM ET.</p>
+    <p>Listings priced below market — scraped from Kijiji. Updated daily.</p>
   </header>
 
   <div class="filters">
-    <label>Min Beds:</label>
-    <select id="min_beds">
-      <option value="">Any</option>
-      <option value="0">0 (Bachelor)</option>
-      <option value="1">1 BR</option>
-      <option value="2">2 BR</option>
-      <option value="3">3+ BR</option>
-    </select>
+    <!-- Beds -->
+    <div class="filter-group">
+      <label>Min Beds</label>
+      <select id="beds_min">
+        <option value="">Any</option>
+        <option value="0">0 (Bachelor)</option>
+        <option value="1">1 BR</option>
+        <option value="2">2 BR</option>
+        <option value="3">3 BR</option>
+        <option value="4">4+ BR</option>
+      </select>
+    </div>
 
-    <label>Max Price:</label>
-    <select id="max_price">
-      <option value="">Any</option>
-      <option value="2000">$2,000</option>
-      <option value="2500">$2,500</option>
-      <option value="3000">$3,000</option>
-    </select>
+    <!-- Baths -->
+    <div class="filter-group">
+      <label>Min Baths</label>
+      <select id="baths_min">
+        <option value="">Any</option>
+        <option value="1">1+</option>
+        <option value="1.5">1.5+</option>
+        <option value="2">2+</option>
+      </select>
+    </div>
 
-    <label>Neighbourhood:</label>
-    <input id="neighbourhood" type="text" placeholder="e.g. Queen West" style="width: 140px;">
+    <!-- Price range -->
+    <div class="filter-group">
+      <label>Price Range ($)</label>
+      <div class="price-range-wrap">
+        <input id="price_min" type="number" placeholder="Min" min="0" step="50">
+        <span>–</span>
+        <input id="price_max" type="number" placeholder="Max" min="0" step="50">
+      </div>
+    </div>
 
-    <label>Region:</label>
-    <select id="region">
-      <option value="">All Regions</option>
-      <option value="Downtown">Downtown</option>
-      <option value="East End">East End</option>
-      <option value="West End">West End</option>
-      <option value="North York">North York</option>
-      <option value="Etobicoke">Etobicoke</option>
-      <option value="Scarborough">Scarborough</option>
-    </select>
+    <!-- Parking -->
+    <label class="parking-toggle" id="parking_toggle">
+      <input type="checkbox" id="has_parking">
+      <span>🚗 Parking</span>
+    </label>
 
-    <label>Sort:</label>
-    <select id="sort_by">
-      <option value="score">Best Score</option>
-      <option value="pct">% Under Market</option>
-      <option value="price">Lowest Price</option>
-    </select>
+    <!-- Neighbourhood -->
+    <div class="filter-group">
+      <label>Neighbourhood</label>
+      <input id="neighbourhood" type="text" placeholder="e.g. Queen West" style="width: 130px;">
+    </div>
 
-    <button onclick="loadDeals()">Filter</button>
+    <!-- Region -->
+    <div class="filter-group">
+      <label>Region</label>
+      <select id="region">
+        <option value="">All</option>
+        <option value="Downtown">Downtown</option>
+        <option value="East End">East End</option>
+        <option value="West End">West End</option>
+        <option value="North York">North York</option>
+        <option value="Etobicoke">Etobicoke</option>
+        <option value="Scarborough">Scarborough</option>
+      </select>
+    </div>
+
+    <!-- Sort -->
+    <div class="filter-group">
+      <label>Sort By</label>
+      <select id="sort_by">
+        <option value="score">Best Score</option>
+        <option value="pct">% Under Market</option>
+        <option value="price">Lowest Price</option>
+        <option value="beds">Most Beds</option>
+        <option value="days_ago">Freshest</option>
+      </select>
+    </div>
+
+    <div style="display:flex;gap:6px;align-items:flex-end;">
+      <button id="filter_apply" onclick="loadDeals()">Filter</button>
+      <button id="filter_reset" onclick="resetFilters()">Reset</button>
+      <span id="filter_count" class="filter-badge">0</span>
+    </div>
   </div>
 
+  <!-- Stats bar -->
   <div class="stats" id="stats">
-    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Total Deals</div></div>
-    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under Market</div></div>
+    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found</div></div>
+    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under</div></div>
     <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal</div></div>
   </div>
 
@@ -111,14 +182,15 @@
   <table id="deals_table" style="display:none">
     <thead>
       <tr>
-        <th onclick="sortTable('rank')">#</th>
-        <th onclick="sortTable('Neighbourhood')">Neighbourhood</th>
-        <th onclick="sortTable('Region')">Region</th>
-        <th onclick="sortTable('Beds')">Beds</th>
-        <th onclick="sortTable('Price')">Price</th>
-        <th onclick="sortTable('Fair Value')">Fair Value</th>
-        <th onclick="sortTable('pct_under')">% Under</th>
-        <th onclick="sortTable('Days Old')">Days Old</th>
+        <th onclick="sortTable('score')">#</th>
+        <th onclick="sortTable('neighbourhood')">Neighbourhood</th>
+        <th onclick="sortTable('region')">Region</th>
+        <th onclick="sortTable('beds')">BD</th>
+        <th onclick="sortTable('baths')">BA</th>
+        <th onclick="sortTable('price')">Price</th>
+        <th onclick="sortTable('fair')">Fair</th>
+        <th onclick="sortTable('pct')">% Under</th>
+        <th onclick="sortTable('days_ago')">Age</th>
         <th>Link</th>
       </tr>
     </thead>
@@ -128,20 +200,91 @@
 
 <script>
 let allDeals = [];
+let currentSort = 'score';
 
-async function loadDeals() {
-  const minBeds = document.getElementById('min_beds').value;
-  const maxPrice = document.getElementById('max_price').value;
+// Parse URL params on load
+function parseQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('beds_min')) document.getElementById('beds_min').value = params.get('beds_min');
+  if (params.get('baths_min')) document.getElementById('baths_min').value = params.get('baths_min');
+  if (params.get('price_min')) document.getElementById('price_min').value = params.get('price_min');
+  if (params.get('price_max')) document.getElementById('price_max').value = params.get('price_max');
+  if (params.get('has_parking')) {
+    document.getElementById('has_parking').checked = true;
+    document.getElementById('parking_toggle').classList.add('active');
+  }
+  if (params.get('neighbourhood')) document.getElementById('neighbourhood').value = params.get('neighbourhood');
+  if (params.get('region')) document.getElementById('region').value = params.get('region');
+  if (params.get('sort')) {
+    document.getElementById('sort_by').value = params.get('sort');
+    currentSort = params.get('sort');
+  }
+  updateFilterCount();
+}
+
+function buildParams() {
+  const params = new URLSearchParams();
+  const bedsMin = document.getElementById('beds_min').value;
+  const bathsMin = document.getElementById('baths_min').value;
+  const priceMin = document.getElementById('price_min').value;
+  const priceMax = document.getElementById('price_max').value;
+  const hasParking = document.getElementById('has_parking').checked;
   const neighbourhood = document.getElementById('neighbourhood').value.trim();
   const region = document.getElementById('region').value;
   const sortBy = document.getElementById('sort_by').value;
 
-  const params = new URLSearchParams();
-  if (minBeds) params.set('min_beds', minBeds);
-  if (maxPrice) params.set('max_price', maxPrice);
+  if (bedsMin) params.set('beds_min', bedsMin);
+  if (bathsMin) params.set('baths_min', bathsMin);
+  if (priceMin) params.set('price_min', priceMin);
+  if (priceMax) params.set('price_max', priceMax);
+  if (hasParking) params.set('has_parking', 'true');
   if (neighbourhood) params.set('neighbourhood', neighbourhood);
   if (region) params.set('region', region);
-  params.set('sort', sortBy);
+  if (sortBy !== 'score') params.set('sort', sortBy);
+
+  return params;
+}
+
+function updateFilterCount() {
+  let count = 0;
+  if (document.getElementById('beds_min').value) count++;
+  if (document.getElementById('baths_min').value) count++;
+  if (document.getElementById('price_min').value) count++;
+  if (document.getElementById('price_max').value) count++;
+  if (document.getElementById('has_parking').checked) count++;
+  if (document.getElementById('neighbourhood').value.trim()) count++;
+  if (document.getElementById('region').value) count++;
+  const badge = document.getElementById('filter_count');
+  if (count > 0) {
+    badge.textContent = count;
+    badge.classList.add('active');
+  } else {
+    badge.classList.remove('active');
+  }
+}
+
+function resetFilters() {
+  document.getElementById('beds_min').selectedIndex = 0;
+  document.getElementById('baths_min').selectedIndex = 0;
+  document.getElementById('price_min').value = '';
+  document.getElementById('price_max').value = '';
+  document.getElementById('has_parking').checked = false;
+  document.getElementById('parking_toggle').classList.remove('active');
+  document.getElementById('neighbourhood').value = '';
+  document.getElementById('region').selectedIndex = 0;
+  document.getElementById('sort_by').selectedIndex = 0;
+  loadDeals();
+  history.replaceState({}, '', window.location.pathname);
+  updateFilterCount();
+}
+
+async function loadDeals() {
+  const params = buildParams();
+  updateFilterCount();
+
+  // Update URL (no reload)
+  const newUrl = params.toString() ? '?' + params.toString() : window.location.pathname;
+  history.replaceState({}, '', newUrl);
 
   document.getElementById('loading').style.display = 'block';
   document.getElementById('no_deals').style.display = 'none';
@@ -150,10 +293,9 @@ async function loadDeals() {
   try {
     const res = await fetch('/api/deals?' + params.toString());
     allDeals = await res.json();
-
     renderDeals(allDeals);
   } catch(e) {
-    document.getElementById('loading').textContent = 'Error loading deals: ' + e.message;
+    document.getElementById('loading').textContent = 'Error: ' + e.message;
   }
 }
 
@@ -175,12 +317,12 @@ function renderDeals(deals) {
     return;
   }
 
-  // Stats
   document.getElementById('total_count').textContent = deals.length;
   const pcts = deals.map(d => parseFloat(d.pct_under)).filter(n => !isNaN(n));
   const avg = pcts.length ? (pcts.reduce((a,b)=>a+b,0)/pcts.length).toFixed(1) : '—';
   document.getElementById('avg_under').textContent = avg !== '—' ? avg + '%' : '—';
-  document.getElementById('best_deal').textContent = deals[0] ? deals[0].pct_under_fmt : '—';
+  const best = deals[0];
+  document.getElementById('best_deal').textContent = best ? best.pct_under_fmt : '—';
 
   const tbody = document.getElementById('deals_body');
   tbody.innerHTML = '';
@@ -189,14 +331,17 @@ function renderDeals(deals) {
     const pctCls = pctClass(pct);
     const link = d.link || '#';
     const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
+    const baths = d.baths !== undefined && d.baths !== null ? d.baths : '—';
     const days = d.days_ago !== undefined && d.days_ago !== null ? d.days_ago : '—';
-    const sqft = d.sqft && d.sqft !== 'nan' ? d.sqft : '—';
+    const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
+    const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">STALE</span>' : '';
 
     const row = `<tr>
       <td>${i + 1}</td>
-      <td><strong>${d.neighbourhood || '—'}</strong></td>
+      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag}</td>
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
+      <td>${baths}</td>
       <td>${d.price_fmt || '—'}</td>
       <td>${d.fair_value_fmt || '—'}</td>
       <td class="${pctCls}"><strong>${pct}</strong></td>
@@ -209,11 +354,19 @@ function renderDeals(deals) {
   document.getElementById('deals_table').style.display = 'table';
 }
 
-function sortTable(col) {
-  // Simple sort by clicking headers
-}
+// Parking toggle styling
+document.getElementById('has_parking').addEventListener('change', function() {
+  document.getElementById('parking_toggle').classList.toggle('active', this.checked);
+});
 
-// Load on page open
+// Wire up all inputs to update filter count on change
+['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region'].forEach(function(id) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', updateFilterCount);
+});
+
+// Init
+parseQueryParams();
 loadDeals();
 </script>
 </body>
