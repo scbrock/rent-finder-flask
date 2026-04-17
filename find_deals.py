@@ -2,11 +2,11 @@
 Toronto Rental Deal Finder
 MC-245 — Finds underpriced Toronto rental listings.
 
-Usage: python find_deals.py
+Usage: python find_deals.py [--region Downtown|East End|West End|North York|Etobicoke|Scarborough]
 Output: console table + deals_output.csv
 """
 
-import sys, os, warnings, json
+import sys, os, warnings, json, argparse
 warnings.filterwarnings("ignore")
 
 import requests
@@ -14,6 +14,17 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Toronto Rent Deal Finder")
+    parser.add_argument(
+        "--region",
+        choices=["Downtown", "East End", "West End", "North York", "Etobicoke", "Scarborough"],
+        default=None,
+        help="Filter results to a specific Toronto region",
+    )
+    return parser.parse_args()
 
 # ── Data Collection ────────────────────────────────────────────────────────────
 
@@ -323,8 +334,13 @@ def score_deals(df: pd.DataFrame) -> pd.DataFrame:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    args = parse_args()
+    region_filter = args.region
+
     print("=" * 80)
     print("  TORONTO RENTAL DEAL FINDER -- MC-245")
+    if region_filter:
+        print(f"  Region filter: {region_filter}")
     print("=" * 80)
     print()
 
@@ -416,16 +432,21 @@ def main():
     from region_map import neighbourhood_to_region
     scored["region"] = scored["neighborhood"].apply(neighbourhood_to_region)
 
+    # Apply region filter if specified
+    if region_filter:
+        scored = scored[scored["region"] == region_filter].reset_index(drop=True)
+        scored["rank"] = range(1, len(scored) + 1)
+
     top = scored.head(10).copy()
     top["fair_value"] = top["fair_value"].round(0).astype(int)
     top["pct_under"] = top["pct_under"].round(1)
     top["final_score"] = top["final_score"].round(3)
 
-    print(f"  {'#':<3} {'Price':>8} {'Fair':>8} {'Under':>7} {'Neighborhood':<30} {'Bd':>3} {'Sqft':>6} {'Score':>6}  Link")
-    print("  " + "-" * 125)
+    print(f"  {'#':<3} {'Price':>8} {'Fair':>8} {'Under':>7} {'Neighborhood':<30} {'Bd':>3} {'Region':<12} {'Score':>6}  Link")
+    print("  " + "-" * 135)
     for _, row in top.iterrows():
         sqft_str = f"{row['sqft']:,}" if pd.notna(row["sqft"]) else "-"
-        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {sqft_str:>6} {row['final_score']:>6.3f}  {row['link'][:55]}")
+        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12} {row['final_score']:>6.3f}  {row['link'][:55]}")
 
     # Save
     out_dir = os.path.dirname(os.path.abspath(__file__))
@@ -433,18 +454,25 @@ def main():
     scored.to_csv(csv_path, index=False)
 
     underpriced = scored[scored["pct_under"] > 0]
-    best = scored.iloc[0]
     print()
     print(f"  Saved {len(scored)} listings -> {csv_path}")
-    print(f"  Under market: {len(underpriced)}/{len(scored)} ({len(underpriced)/len(scored)*100:.0f}%)")
-    best_pct = f"{best['pct_under']:+.1f}%" if best['pct_under'] > 0 else f"{best['pct_under']:.1f}%"
-    print(f"  BEST DEAL: {best['neighborhood']} {best['beds']}BR @ ${best['price']:,} ({best_pct} under market, score={best['final_score']:.3f})")
+    pct_under = f"{len(underpriced)/len(scored)*100:.0f}%" if len(scored) > 0 else "0%"
+    print(f"  Under market: {len(underpriced)}/{len(scored)} ({pct_under})")
+    if scored.empty:
+        print("  No deals found for this region.")
+    else:
+        best = scored.iloc[0]
+        best_pct = f"{best['pct_under']:+.1f}%" if best['pct_under'] > 0 else f"{best['pct_under']:.1f}%"
+        print(f"  BEST DEAL: {best['neighborhood']} {best['beds']}BR @ ${best['price']:,} ({best_pct} under market, score={best['final_score']:.3f})")
     # ── Post to Discord ───────────────────────────────────────────────────────
     try:
         import tempfile, subprocess, json as _json
 
         underpriced = scored[scored["pct_under"] > 0]
-        top3 = scored.head(3)
+        top3 = scored.head(3) if len(scored) >= 3 else scored
+
+        if top3.empty:
+            raise ValueError("no deals to post")
 
         medal = ["🥇", "🥈", "🥉"]
         lines = [
