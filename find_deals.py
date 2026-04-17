@@ -232,7 +232,8 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
                 "baths": baths_num,
                 "sqft": None,
                 "neighborhood": neighborhood[:60],
-                "days_ago": 5,  # HTML cards don't expose listing age; conservative default
+                "days_ago": getattr(lst, 'days_ago', 5),
+                "is_stale": getattr(lst, 'is_stale', False),
                 "link": lst.url,
             })
     except Exception as e:
@@ -312,37 +313,68 @@ def score_deals(df: pd.DataFrame) -> pd.DataFrame:
     Score deals: excess = (fair - price) / fair.
     Higher score = more underpriced.
     Boost for fresh listings.
+    Excludes stale (>30 days) listings from fair value and scoring.
     """
     df = df.copy()
 
-    # Fair value: mean price by neighborhood + beds
-    fair = df.groupby(["neighborhood", "beds"])["price"].transform("mean")
-    df["fair_value"] = fair
+    # Separate active vs stale
+    is_stale_col = "is_stale" in df.columns
+    if is_stale_col:
+        active = df[~df["is_stale"]].copy()
+        stale = df[df["is_stale"]].copy()
+    else:
+        active = df.copy()
+        stale = pd.DataFrame()
+
+    # Fair value: computed from active listings only (not stale)
+    if len(active) == 0:
+        df["fair_value"] = np.nan
+        df["pct_under"] = np.nan
+        df["score"] = np.nan
+        df["freshness_boost"] = np.nan
+        df["final_score"] = np.nan
+        return df
+
+    fair = active.groupby(["neighborhood", "beds"])["price"].transform("mean")
+    active["fair_value"] = fair
 
     # If no group data, use global median by beds
-    df["fair_value"] = df["fair_value"].fillna(df.groupby("beds")["price"].transform("median"))
+    active["fair_value"] = active["fair_value"].fillna(
+        active.groupby("beds")["price"].transform("median")
+    )
 
     # % under market
-    df["pct_under"] = (df["fair_value"] - df["price"]) / df["fair_value"] * 100
+    active["pct_under"] = (active["fair_value"] - active["price"]) / active["fair_value"] * 100
 
     # Base score: 0–1 scale (max pct_under observed)
-    max_under = df["pct_under"].max()
+    max_under = active["pct_under"].max()
     if max_under > 0:
-        df["score"] = df["pct_under"] / max_under
+        active["score"] = active["pct_under"] / max_under
     else:
-        df["score"] = 0.0
+        active["score"] = 0.0
 
-    # Freshness boost: < 7 days → +0.1, < 14 days → +0.05
-    df["freshness_boost"] = df["days_ago"].apply(
+    # Freshness boost: < 7 days -> +0.1, < 14 days -> +0.05
+    active["freshness_boost"] = active["days_ago"].apply(
         lambda d: 0.15 if d <= 5 else (0.08 if d <= 14 else 0.0)
     )
 
     # Final score
-    df["final_score"] = df["score"] + df["freshness_boost"]
+    active["final_score"] = active["score"] + active["freshness_boost"]
 
     # Rank
-    df = df.sort_values("final_score", ascending=False).reset_index(drop=True)
-    df["rank"] = range(1, len(df) + 1)
+    active = active.sort_values("final_score", ascending=False).reset_index(drop=True)
+    active["rank"] = range(1, len(active) + 1)
+
+    # Stale listings: fair_value and score remain NaN (not scored)
+    if len(stale) > 0:
+        stale["fair_value"] = np.nan
+        stale["pct_under"] = np.nan
+        stale["score"] = np.nan
+        stale["freshness_boost"] = np.nan
+        stale["final_score"] = np.nan
+        stale["rank"] = np.nan
+
+    df = pd.concat([active, stale], ignore_index=True)
 
     return df
 
@@ -619,7 +651,8 @@ def main():
     for _, row in top.iterrows():
         sqft_str = f"{row['sqft']:,}" if pd.notna(row["sqft"]) else "-"
         comm_str = f" | {row['commute_minutes']:.0f}min" if pd.notna(row.get("commute_minutes")) else ""
-        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12}{comm_str} {row['final_score']:>6.3f}  {row['link'][:55]}")
+        stale_str = " [STALE]" if row.get("is_stale") else ""
+        print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12}{comm_str}{stale_str} {row['final_score']:>6.3f}  {row['link'][:55]}")
 
     # Save
     out_dir = os.path.dirname(os.path.abspath(__file__))

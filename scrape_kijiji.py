@@ -60,6 +60,8 @@ class Listing:
     url: str
     image_url: str
     source: str = "kijiji"
+    days_ago: int = 5   # Days since listing was posted (computed from listing_id Unix timestamp)
+    is_stale: bool = False  # True if days_ago > 30
 
 
 def _is_rental_url(url: str) -> bool:
@@ -81,7 +83,42 @@ def _is_rental_title(title: str) -> bool:
     return has_rental and not has_non_rental
 
 
-def parse_html_cards(html: str) -> list[Listing]:
+def _extract_activation_dates(html: str) -> dict:
+    """Extract listing_id -> activationDate from __NEXT_DATA__ JSON in HTML."""
+    import datetime as _dt, re as _re, json as _json
+    match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.DOTALL)
+    if not match:
+        return {}
+    try:
+        data = _json.loads(match.group(1))
+        apollo = data.get("props", {}).get("pageProps", {}).get("__APOLLO_STATE__", {})
+        result = {}
+        for key, val in apollo.items():
+            if isinstance(val, dict) and val.get("__typename") == "RealEstateListing":
+                listing_id = val.get("id", "")
+                if isinstance(listing_id, str):
+                    listing_id = listing_id.strip("'")
+                activation = val.get("activationDate", "")
+                if activation:
+                    result[listing_id] = activation
+        return result
+    except Exception:
+        return {}
+
+
+def _compute_days(activation_str: str) -> tuple:
+    """Parse activationDate ISO string, return (days_ago, is_stale)."""
+    import datetime as _dt
+    try:
+        dt = _dt.datetime.fromisoformat(activation_str.replace("Z", "+00:00"))
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        days = max(0, min((now_utc - dt).days, 365))
+        return days, days > 30
+    except Exception:
+        return 5, False
+
+
+def parse_html_cards(html: str, activation_dates: dict) -> list[Listing]:
     """Parse SSR listing cards from Kijiji HTML.
 
     Card structure (confirmed):
@@ -139,6 +176,13 @@ def parse_html_cards(html: str) -> list[Listing]:
         img_el = card.find("img", {"data-testid": "listing-card-image"})
         image_url = img_el.get("src", "") if img_el else ""
 
+        # Days_ago and is_stale from __NEXT_DATA__ activation dates
+        activation = activation_dates.get(str(lst_id), "")
+        if activation:
+            days_ago, is_stale = _compute_days(activation)
+        else:
+            days_ago, is_stale = 5, False
+
         listings.append(Listing(
             listing_id=str(lst_id),
             title=title,
@@ -149,6 +193,8 @@ def parse_html_cards(html: str) -> list[Listing]:
             baths=baths,
             url=url,
             image_url=image_url,
+            days_ago=days_ago,
+            is_stale=is_stale,
         ))
 
     return listings
@@ -186,7 +232,8 @@ def scrape(
             if r.status_code != 200:
                 break
 
-            page_listings = parse_html_cards(r.text)
+            activation_dates = _extract_activation_dates(r.text)
+            page_listings = parse_html_cards(r.text, activation_dates)
             new = [l for l in page_listings if l.listing_id not in seen]
             seen.update(l.listing_id for l in new)
             all_listings.extend(new)
