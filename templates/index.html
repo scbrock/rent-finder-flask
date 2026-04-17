@@ -163,28 +163,27 @@ function renderDeals(deals) {
 
   // Stats
   document.getElementById('total_count').textContent = deals.length;
-  const pcts = deals.map(d => parseFloat(d['% Under'])).filter(n => !isNaN(n));
+  const pcts = deals.map(d => parseFloat(d.pct_under)).filter(n => !isNaN(n));
   const avg = pcts.length ? (pcts.reduce((a,b)=>a+b,0)/pcts.length).toFixed(1) : '—';
   document.getElementById('avg_under').textContent = avg !== '—' ? avg + '%' : '—';
-  document.getElementById('best_deal').textContent = deals[0] ? deals[0]['% Under'] : '—';
+  document.getElementById('best_deal').textContent = deals[0] ? deals[0].pct_under_fmt : '—';
 
   const tbody = document.getElementById('deals_body');
   tbody.innerHTML = '';
   deals.forEach((d, i) => {
-    const pct = d['% Under'] || '—';
+    const pct = d.pct_under_fmt || '—';
     const pctCls = pctClass(pct);
-    const link = d['Link'] || '#';
-    const beds = d['Beds'] !== undefined && d['Beds'] !== null ? d['Beds'] : '—';
-    const days = d['Days Old'] !== undefined && d['Days Old'] !== null ? d['Days Old'] : '—';
-    const sqft = d['Sqft'] && d['Sqft'] !== 'nan' ? d['Sqft'] : '—';
-    const rank = d['rank'] || i + 1;
+    const link = d.link || '#';
+    const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
+    const days = d.days_ago !== undefined && d.days_ago !== null ? d.days_ago : '—';
+    const sqft = d.sqft && d.sqft !== 'nan' ? d.sqft : '—';
 
     const row = `<tr>
-      <td>${rank}</td>
-      <td><strong>${d['Neighbourhood'] || '—'}</strong></td>
+      <td>${i + 1}</td>
+      <td><strong>${d.neighbourhood || '—'}</strong></td>
       <td>${beds}</td>
-      <td>${d['Price'] || '—'}</td>
-      <td>${d['Fair Value'] || '—'}</td>
+      <td>${d.price_fmt || '—'}</td>
+      <td>${d.fair_value_fmt || '—'}</td>
       <td class="${pctCls}"><strong>${pct}</strong></td>
       <td>${days}d</td>
       <td><a href="${link}" target="_blank" class="link-btn">View</a></td>
