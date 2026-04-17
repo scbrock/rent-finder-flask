@@ -43,6 +43,7 @@ def load_deals():
                 'pct_under_fmt': f"{pct_under:.1f}%",
                 'days_ago': r.get('days_ago', ''),
                 'is_stale': r.get('is_stale', '').strip().lower() in ('true', '1'),
+                'commute_minutes': float(r['commute_minutes']) if r.get('commute_minutes', '').strip() else None,
                 'link': r.get('link', ''),
                 'final_score': round(final_score, 3) if final_score else 0,
             })
@@ -93,7 +94,6 @@ def api_deals():
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
-        return jsonify(deals[:50])
 
     # Sort
     reverse = sort_by not in ('price', 'days_ago')

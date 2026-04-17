@@ -151,6 +151,18 @@
       </select>
     </div>
 
+    <!-- Commute destination -->
+    <div class="filter-group">
+      <label>Commute Destination</label>
+      <input id="commute_dest" type="text" placeholder="e.g. Union Station" style="width:150px;" title="Destination address for commute filter">
+    </div>
+
+    <!-- Max commute -->
+    <div class="filter-group">
+      <label>Max Commute (min)</label>
+      <input id="max_commute" type="number" placeholder="e.g. 30" min="1" max="180" style="width:80px;">
+    </div>
+
     <!-- Sort -->
     <div class="filter-group">
       <label>Sort By</label>
@@ -190,6 +202,7 @@
         <th onclick="sortTable('price')">Price</th>
         <th onclick="sortTable('fair')">Fair</th>
         <th onclick="sortTable('pct')">% Under</th>
+        <th onclick="sortTable('commute')" title="Walking commute time">↳ Min</th>
         <th onclick="sortTable('days_ago')">Age</th>
         <th>Link</th>
       </tr>
@@ -219,6 +232,8 @@ function parseQueryParams() {
     document.getElementById('sort_by').value = params.get('sort');
     currentSort = params.get('sort');
   }
+  if (params.get('commute_dest')) document.getElementById('commute_dest').value = params.get('commute_dest');
+  if (params.get('max_commute')) document.getElementById('max_commute').value = params.get('max_commute');
   updateFilterCount();
 }
 
@@ -241,6 +256,10 @@ function buildParams() {
   if (neighbourhood) params.set('neighbourhood', neighbourhood);
   if (region) params.set('region', region);
   if (sortBy !== 'score') params.set('sort', sortBy);
+  const commuteDest = document.getElementById('commute_dest').value.trim();
+  const maxCommute = document.getElementById('max_commute').value;
+  if (commuteDest) params.set('commute_dest', commuteDest);
+  if (maxCommute) params.set('max_commute', maxCommute);
 
   return params;
 }
@@ -285,6 +304,12 @@ async function loadDeals() {
   // Update URL (no reload)
   const newUrl = params.toString() ? '?' + params.toString() : window.location.pathname;
   history.replaceState({}, '', newUrl);
+
+  // Add commute params to URL
+  const commuteDest = document.getElementById('commute_dest').value.trim();
+  const maxCommute = document.getElementById('max_commute').value;
+  if (commuteDest) params.set('commute_dest', commuteDest);
+  if (maxCommute) params.set('max_commute', maxCommute);
 
   document.getElementById('loading').style.display = 'block';
   document.getElementById('no_deals').style.display = 'none';
@@ -333,6 +358,7 @@ function renderDeals(deals) {
     const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
     const baths = d.baths !== undefined && d.baths !== null ? d.baths : '—';
     const days = d.days_ago !== undefined && d.days_ago !== null ? d.days_ago : '—';
+    const commute = d.commute_minutes !== undefined && d.commute_minutes !== null && d.commute_minutes !== '' ? d.commute_minutes + ' min' : '—';
     const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
     const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">STALE</span>' : '';
 
@@ -345,6 +371,7 @@ function renderDeals(deals) {
       <td>${d.price_fmt || '—'}</td>
       <td>${d.fair_value_fmt || '—'}</td>
       <td class="${pctCls}"><strong>${pct}</strong></td>
+      <td>${commute}</td>
       <td>${days}d</td>
       <td><a href="${link}" target="_blank" class="link-btn">View</a></td>
     </tr>`;
