@@ -79,6 +79,17 @@
     <label>Neighbourhood:</label>
     <input id="neighbourhood" type="text" placeholder="e.g. Queen West" style="width: 140px;">
 
+    <label>Region:</label>
+    <select id="region">
+      <option value="">All Regions</option>
+      <option value="Downtown">Downtown</option>
+      <option value="East End">East End</option>
+      <option value="West End">West End</option>
+      <option value="North York">North York</option>
+      <option value="Etobicoke">Etobicoke</option>
+      <option value="Scarborough">Scarborough</option>
+    </select>
+
     <label>Sort:</label>
     <select id="sort_by">
       <option value="score">Best Score</option>
@@ -102,6 +113,7 @@
       <tr>
         <th onclick="sortTable('rank')">#</th>
         <th onclick="sortTable('Neighbourhood')">Neighbourhood</th>
+        <th onclick="sortTable('Region')">Region</th>
         <th onclick="sortTable('Beds')">Beds</th>
         <th onclick="sortTable('Price')">Price</th>
         <th onclick="sortTable('Fair Value')">Fair Value</th>
@@ -121,12 +133,14 @@ async function loadDeals() {
   const minBeds = document.getElementById('min_beds').value;
   const maxPrice = document.getElementById('max_price').value;
   const neighbourhood = document.getElementById('neighbourhood').value.trim();
+  const region = document.getElementById('region').value;
   const sortBy = document.getElementById('sort_by').value;
 
   const params = new URLSearchParams();
   if (minBeds) params.set('min_beds', minBeds);
   if (maxPrice) params.set('max_price', maxPrice);
   if (neighbourhood) params.set('neighbourhood', neighbourhood);
+  if (region) params.set('region', region);
   params.set('sort', sortBy);
 
   document.getElementById('loading').style.display = 'block';
@@ -181,6 +195,7 @@ function renderDeals(deals) {
     const row = `<tr>
       <td>${i + 1}</td>
       <td><strong>${d.neighbourhood || '—'}</strong></td>
+      <td>${d.region || '—'}</td>
       <td>${beds}</td>
       <td>${d.price_fmt || '—'}</td>
       <td>${d.fair_value_fmt || '—'}</td>

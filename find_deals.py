@@ -412,6 +412,10 @@ def main():
 
     scored = score_deals(df)
 
+    # Add region column
+    from region_map import neighbourhood_to_region
+    scored["region"] = scored["neighborhood"].apply(neighbourhood_to_region)
+
     top = scored.head(10).copy()
     top["fair_value"] = top["fair_value"].round(0).astype(int)
     top["pct_under"] = top["pct_under"].round(1)

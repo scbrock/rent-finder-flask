@@ -1,6 +1,6 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🚧 Step 5 — Web App DEPLOY BLOCKED — switched to Render.com
+**Current Phase:** 🚧 Step 5 — Web App DEPLOY BLOCKED — MC-279 blocked on missing `RENDER_SERVICE_ID` GitHub secret
 **Last Updated:** 2026-04-16 (6:45 PM ET)
 
 ---
@@ -70,4 +70,4 @@ All acceptance criteria met:
 
 ## Blockers
 
-- None — all Step 4 blockers resolved as of 2026-04-16 PM session.
+- **MC-279 DEPLOY BLOCKED (2026-04-17):** GitHub Actions workflow `deploy.yml` uses `JorgeLNJunior/render-deploy@v1.5.0` which requires `RENDER_SERVICE_ID` GitHub secret in addition to `RENDER_API_KEY` (already set). Missing secret: `RENDER_SERVICE_ID`. User needs to add this from dashboard.render.com → rent-finder-flask service → Settings → General. See MC-279 comment for steps.

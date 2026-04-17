@@ -30,6 +30,7 @@ def load_deals():
             days_ago = r.get('days_ago', '')
             deals.append({
                 'neighbourhood': r.get('neighborhood', ''),
+                'region': r.get('region', ''),
                 'beds': beds,
                 'price': price,
                 'price_fmt': f"${price:,.0f}",
@@ -58,6 +59,7 @@ def api_deals():
     max_price = request.args.get('max_price', type=int)
     min_beds = request.args.get('min_beds', type=int)
     neighbourhood = request.args.get('neighbourhood', '').lower()
+    region = request.args.get('region', '').strip()
     sort_by = request.args.get('sort', 'score')
 
     if max_price:
@@ -66,6 +68,8 @@ def api_deals():
         deals = [d for d in deals if d['beds'] is not None and d['beds'] >= min_beds]
     if neighbourhood:
         deals = [d for d in deals if neighbourhood in d['neighbourhood'].lower()]
+    if region:
+        deals = [d for d in deals if d.get('region', '') == region]
 
     reverse = sort_by != 'price'
     key = 'price' if sort_by == 'price' else 'pct_under' if sort_by == 'pct' else 'final_score'

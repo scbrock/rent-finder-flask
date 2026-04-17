@@ -1,60 +1,60 @@
-source,price,beds,baths,sqft,neighborhood,days_ago,link,fair_value,pct_under,score,freshness_boost,final_score,rank
-Kijiji,1425,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/bansley-apartments-bachelor-apartment-for-rent/1729587513,1901.8333333333333,25.072298659188498,1.0,0.15,1.15,1
-Kijiji,1499,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/studio-bachelor-apartment-for-rent-55-triller-ave/1735648005,1901.8333333333333,21.18131627377092,0.8448095071653269,0.15,0.9948095071653269,2
-Kijiji,1600,0,0.0,,Birchcliffe-Cliffside,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/bright-2-bedroom-separate-entrance-near-ttc-go-train-stn/1735125566,1975.0,18.9873417721519,0.7573035895212351,0.15,0.9073035895212351,3
-Kijiji,1550,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-bachelor-high-park-and-indian-road-id-2641/1733828035,1901.8333333333333,18.49969327841556,0.7378538972387277,0.15,0.8878538972387278,4
-Kijiji,1575,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-bachelor-id-4393/1732964241,1901.8333333333333,17.185172202260972,0.6854246766864732,0.15,0.8354246766864732,5
-Kijiji,1599,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/skyliner-studio-apartment-for-rent/1735551475,1901.8333333333333,15.923231969152567,0.6350926249563089,0.15,0.7850926249563089,6
-Kijiji,1599,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/spencer-apartments-bachelor-apartment-for-rent/1731764895,1901.8333333333333,15.923231969152567,0.6350926249563089,0.15,0.7850926249563089,7
-Kijiji,2099,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent-1340-danforth-road/1733853274,2297.0,8.619939050936004,0.3438033013290135,0.15,0.4938033013290135,8
-Kijiji,1599,0,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/60-tyndall-ave-bachelor-apartment-for-rent/1731764897,1749.5,8.6024578450986,0.34310606945270933,0.15,0.4931060694527093,9
-Kijiji,1825,1,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bedroom-apartment-for-rent/1703054664,1912.0,4.550209205020921,0.1814835275725052,0.15,0.3314835275725052,10
-Kijiji,2795,3,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent/1720047732,2895.0,3.454231433506045,0.13777083148457703,0.15,0.28777083148457705,11
-Kijiji,2399,3,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent-1360-danforth-road/1734762528,2449.0,2.041649652919559,0.081430493496907,0.15,0.23143049349690697,12
-Kijiji,1200,0,0.0,,Humber Summit,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basment-apartment-for-rent/1736087563,1200.0,0.0,0.0,0.15,0.15,13
-Kijiji,2780,2,0.0,,Old Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735859702,2780.0,0.0,0.0,0.15,0.15,14
-Kijiji,3200,0,0.0,,Sonoma Heights,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735897780,3200.0,0.0,0.0,0.15,0.15,15
-Kijiji,2450,0,0.0,,North St.James Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-apartment-for-rent/1735578176,2450.0,0.0,0.0,0.15,0.15,16
-Kijiji,2800,2,2.0,,Guildwood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735773649,2800.0,0.0,0.0,0.15,0.15,17
-Kijiji,2300,2,1.0,,Englemount-Lawrence,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735784438,2300.0,0.0,0.0,0.15,0.15,18
-Kijiji,1900,0,0.0,,Leaside-Bennington,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735815104,1900.0,0.0,0.0,0.15,0.15,19
-Kijiji,2250,0,0.0,,Old Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/downtown-condo-for-rent/1735999180,2250.0,0.0,0.0,0.15,0.15,20
-Kijiji,1450,0,0.0,,Brockton Village,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1736085729,1450.0,0.0,0.0,0.15,0.15,21
-Kijiji,2650,2,2.0,,Woodbine Corridor,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735227546,2650.0,0.0,0.0,0.15,0.15,22
-Kijiji,1449,0,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/scarborough-studio-bachelor-apartment-for-rent-10-macey-aven/1721912383,1449.0,0.0,0.0,0.15,0.15,23
-Kijiji,2250,0,0.0,,Cedar Wood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-apartment-for-rent-in-markham/1733753350,2250.0,0.0,0.0,0.15,0.15,24
-Kijiji,1900,0,0.0,,Rockcliffe-Smythe,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735932475,1900.0,0.0,0.0,0.15,0.15,25
-Kijiji,1699,1,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bedroom-apartment-for-rent-1360-danforth-road/1735485188,1699.0,0.0,0.0,0.15,0.15,26
-Kijiji,1900,2,0.0,,Dovercourt Village,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1736047075,1900.0,0.0,0.0,0.15,0.15,27
-Kijiji,1700,3,0.0,,Golfdale Gardens,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-2-and-3-bedroom-apartments-available/1734239942,1700.0,0.0,0.0,0.15,0.15,28
-Kijiji,1800,0,1.0,,North York,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/one-bedroom-keele-and-wilson-id-2976/1733056029,1800.0,0.0,0.0,0.15,0.15,29
-Kijiji,2650,0,0.0,,Pelmo Park-Humberlea,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-townhouse-for-rent/1735935759,2650.0,0.0,0.0,0.15,0.15,30
-Kijiji,1200,0,0.0,,Oakwood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1732727590,1200.0,0.0,0.0,0.15,0.15,31
-Kijiji,1400,1,0.0,,Junction Area,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-apartment-for-rent/1736049370,1400.0,0.0,0.0,0.15,0.15,32
-Kijiji,2100,0,0.0,,Edenbridge-Humber Valley,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735729439,2100.0,0.0,0.0,0.15,0.15,33
-Kijiji,2400,2,0.0,,Clanton Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735649881,2400.0,0.0,0.0,0.15,0.15,34
-Kijiji,2700,2,2.0,,Regent Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartments-for-rent/1735577313,2700.0,0.0,0.0,0.15,0.15,35
-Kijiji,1900,0,0.0,,York University Heights,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-fo-rent/1736097971,1900.0,0.0,0.0,0.15,0.15,36
-Kijiji,1800,0,2.51,,Bloordale Gardens,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735499770,1800.0,0.0,0.0,0.15,0.15,37
-Kijiji,2549,2,0.0,,South Parkdale,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/maynard-apartments-2-bedroom-apartment-for-rent/1736040377,2549.0,0.0,0.0,0.15,0.15,38
-Kijiji,3050,2,2.0,,L'Amoreaux West,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/rent-apartment/1735589306,3050.0,0.0,0.0,0.15,0.15,39
-Kijiji,1850,0,0.0,,North Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/studio-apartment-for-rent/1735864513,1850.0,0.0,0.0,0.15,0.15,40
-Kijiji,2800,2,0.0,,Eglinton East,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735547836,2800.0,0.0,0.0,0.15,0.15,41
-Kijiji,1600,0,0.0,,Dean Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1735810791,1600.0,0.0,0.0,0.15,0.15,42
-Kijiji,2300,0,0.0,,Flemingdon Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/to-rent-apartment/1735540119,2300.0,0.0,0.0,0.15,0.15,43
-Kijiji,1400,1,1.0,,West Shore,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bed-1-bath-for-rent/1734732414,1400.0,0.0,0.0,0.15,0.15,44
-Kijiji,2200,0,1.0,,South Parkdale,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-king-and-jameson-id-2358/1735549033,2200.0,0.0,0.0,0.15,0.15,45
-Kijiji,2299,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/scarborough-2-bedrooms-apartment-for-rent-10-macey-avenue/1726600425,2297.0,-0.087070091423596,-0.0034727606194849847,0.15,0.146527239380515,46
-Kijiji,2499,3,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent-1350-danforth-road/1729944687,2449.0,-2.041649652919559,-0.081430493496907,0.15,0.068569506503093,47
-Kijiji,2995,3,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent/1735111199,2895.0,-3.454231433506045,-0.13777083148457703,0.15,0.012229168515422967,48
-Kijiji,2395,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent/1719371541,2297.0,-4.266434479756204,-0.17016527035476425,0.15,-0.02016527035476426,49
-Kijiji,2395,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent/1687944850,2297.0,-4.266434479756204,-0.17016527035476425,0.15,-0.02016527035476426,50
-Kijiji,1999,1,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/parkdale-1-bedroom-apartment-for-rent-140-146-jameson-avenue/1733036168,1912.0,-4.550209205020921,-0.1814835275725052,0.15,-0.03148352757250519,51
-Kijiji,2025,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-one-bedroom-yonge-and-st-clair-id-2385/1734162033,1901.8333333333333,-6.476207168521607,-0.2583012932541072,0.15,-0.10830129325410723,52
-Kijiji,1900,0,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/avenue-park-apartments-studio-apartment-for-rent/1728173049,1749.5,-8.6024578450986,-0.34310606945270933,0.15,-0.19310606945270933,53
-Kijiji,2100,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-one-bedroom-yonge-and-st-clair-id-4391/1733462551,1901.8333333333333,-10.41977039698537,-0.4155889549108706,0.15,-0.26558895491087064,54
-Kijiji,2250,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/two-bedroom-jameson-and-king-st-id-1607/1733732659,1901.8333333333333,-18.306896853912896,-0.7301642782243974,0.15,-0.5801642782243974,55
-Kijiji,2350,0,0.0,,Birchcliffe-Cliffside,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735988122,1975.0,-18.9873417721519,-0.7573035895212351,0.15,-0.6073035895212351,56
-Kijiji,2350,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-dvp-and-eglinton-ave-e-id-350/1735063853,1901.8333333333333,-23.564981158531246,-0.9398811604334153,0.15,-0.7898811604334153,57
-Kijiji,2400,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-at-st-clarens-and-dupont-id-2747/1732184575,1901.8333333333333,-26.19402331084042,-1.0447396015379242,0.15,-0.8947396015379242,58
-Kijiji,2450,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-yonge-and-wellesley-id-914/1733190647,1901.8333333333333,-28.8230654631496,-1.1495980426424333,0.15,-0.9995980426424332,59
+source,price,beds,baths,sqft,neighborhood,days_ago,link,fair_value,pct_under,score,freshness_boost,final_score,rank,region
+Kijiji,1425,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/bansley-apartments-bachelor-apartment-for-rent/1729587513,1901.8333333333333,25.072298659188498,1.0,0.15,1.15,1,Downtown
+Kijiji,1499,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/studio-bachelor-apartment-for-rent-55-triller-ave/1735648005,1901.8333333333333,21.18131627377092,0.8448095071653269,0.15,0.9948095071653268,2,Downtown
+Kijiji,1600,0,0.0,,Birchcliffe-Cliffside,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/bright-2-bedroom-separate-entrance-near-ttc-go-train-stn/1735125566,1975.0,18.9873417721519,0.7573035895212351,0.15,0.9073035895212352,3,East End
+Kijiji,1550,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-bachelor-high-park-and-indian-road-id-2641/1733828035,1901.8333333333333,18.49969327841556,0.7378538972387277,0.15,0.8878538972387278,4,Downtown
+Kijiji,1575,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-bachelor-id-4393/1732964241,1901.8333333333333,17.185172202260972,0.6854246766864732,0.15,0.8354246766864732,5,Downtown
+Kijiji,1599,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/skyliner-studio-apartment-for-rent/1735551475,1901.8333333333333,15.923231969152567,0.6350926249563089,0.15,0.7850926249563089,6,Downtown
+Kijiji,1599,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/spencer-apartments-bachelor-apartment-for-rent/1731764895,1901.8333333333333,15.923231969152567,0.6350926249563089,0.15,0.7850926249563089,7,Downtown
+Kijiji,2099,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent-1340-danforth-road/1733853274,2297.0,8.619939050936004,0.3438033013290135,0.15,0.4938033013290135,8,Downtown
+Kijiji,1599,0,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/60-tyndall-ave-bachelor-apartment-for-rent/1731764897,1749.5,8.6024578450986,0.3431060694527093,0.15,0.4931060694527093,9,Downtown
+Kijiji,1825,1,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bedroom-apartment-for-rent/1703054664,1912.0,4.550209205020921,0.1814835275725052,0.15,0.3314835275725052,10,Downtown
+Kijiji,2795,3,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent/1720047732,2895.0,3.454231433506045,0.137770831484577,0.15,0.287770831484577,11,Downtown
+Kijiji,2399,3,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent-1360-danforth-road/1734762528,2449.0,2.041649652919559,0.081430493496907,0.15,0.2314304934969069,12,Scarborough
+Kijiji,1200,0,0.0,,Humber Summit,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basment-apartment-for-rent/1736087563,1200.0,0.0,0.0,0.15,0.15,13,West End
+Kijiji,2780,2,0.0,,Old Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735859702,2780.0,0.0,0.0,0.15,0.15,14,Downtown
+Kijiji,3200,0,0.0,,Sonoma Heights,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735897780,3200.0,0.0,0.0,0.15,0.15,15,Etobicoke
+Kijiji,2450,0,0.0,,North St.James Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-apartment-for-rent/1735578176,2450.0,0.0,0.0,0.15,0.15,16,Downtown
+Kijiji,2800,2,2.0,,Guildwood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735773649,2800.0,0.0,0.0,0.15,0.15,17,East End
+Kijiji,2300,2,1.0,,Englemount-Lawrence,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735784438,2300.0,0.0,0.0,0.15,0.15,18,North York
+Kijiji,1900,0,0.0,,Leaside-Bennington,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735815104,1900.0,0.0,0.0,0.15,0.15,19,North York
+Kijiji,2250,0,0.0,,Old Town,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/downtown-condo-for-rent/1735999180,2250.0,0.0,0.0,0.15,0.15,20,Downtown
+Kijiji,1450,0,0.0,,Brockton Village,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1736085729,1450.0,0.0,0.0,0.15,0.15,21,East End
+Kijiji,2650,2,2.0,,Woodbine Corridor,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735227546,2650.0,0.0,0.0,0.15,0.15,22,East End
+Kijiji,1449,0,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/scarborough-studio-bachelor-apartment-for-rent-10-macey-aven/1721912383,1449.0,0.0,0.0,0.15,0.15,23,Scarborough
+Kijiji,2250,0,0.0,,Cedar Wood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-apartment-for-rent-in-markham/1733753350,2250.0,0.0,0.0,0.15,0.15,24,North York
+Kijiji,1900,0,0.0,,Rockcliffe-Smythe,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735932475,1900.0,0.0,0.0,0.15,0.15,25,West End
+Kijiji,1699,1,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bedroom-apartment-for-rent-1360-danforth-road/1735485188,1699.0,0.0,0.0,0.15,0.15,26,Scarborough
+Kijiji,1900,2,0.0,,Dovercourt Village,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1736047075,1900.0,0.0,0.0,0.15,0.15,27,West End
+Kijiji,1700,3,0.0,,Golfdale Gardens,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-2-and-3-bedroom-apartments-available/1734239942,1700.0,0.0,0.0,0.15,0.15,28,North York
+Kijiji,1800,0,1.0,,North York,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/one-bedroom-keele-and-wilson-id-2976/1733056029,1800.0,0.0,0.0,0.15,0.15,29,North York
+Kijiji,2650,0,0.0,,Pelmo Park-Humberlea,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-townhouse-for-rent/1735935759,2650.0,0.0,0.0,0.15,0.15,30,West End
+Kijiji,1200,0,0.0,,Oakwood,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1732727590,1200.0,0.0,0.0,0.15,0.15,31,West End
+Kijiji,1400,1,0.0,,Junction Area,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-apartment-for-rent/1736049370,1400.0,0.0,0.0,0.15,0.15,32,West End
+Kijiji,2100,0,0.0,,Edenbridge-Humber Valley,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735729439,2100.0,0.0,0.0,0.15,0.15,33,West End
+Kijiji,2400,2,0.0,,Clanton Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735649881,2400.0,0.0,0.0,0.15,0.15,34,North York
+Kijiji,2700,2,2.0,,Regent Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartments-for-rent/1735577313,2700.0,0.0,0.0,0.15,0.15,35,Downtown
+Kijiji,1900,0,0.0,,York University Heights,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-fo-rent/1736097971,1900.0,0.0,0.0,0.15,0.15,36,North York
+Kijiji,1800,0,2.51,,Bloordale Gardens,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735499770,1800.0,0.0,0.0,0.15,0.15,37,West End
+Kijiji,2549,2,0.0,,South Parkdale,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/maynard-apartments-2-bedroom-apartment-for-rent/1736040377,2549.0,0.0,0.0,0.15,0.15,38,West End
+Kijiji,3050,2,2.0,,L'Amoreaux West,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/rent-apartment/1735589306,3050.0,0.0,0.0,0.15,0.15,39,North York
+Kijiji,1850,0,0.0,,North Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/studio-apartment-for-rent/1735864513,1850.0,0.0,0.0,0.15,0.15,40,North York
+Kijiji,2800,2,0.0,,Eglinton East,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/condo-for-rent/1735547836,2800.0,0.0,0.0,0.15,0.15,41,East End
+Kijiji,1600,0,0.0,,Dean Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/basement-apartment-for-rent/1735810791,1600.0,0.0,0.0,0.15,0.15,42,North York
+Kijiji,2300,0,0.0,,Flemingdon Park,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/to-rent-apartment/1735540119,2300.0,0.0,0.0,0.15,0.15,43,North York
+Kijiji,1400,1,1.0,,West Shore,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/1-bed-1-bath-for-rent/1734732414,1400.0,0.0,0.0,0.15,0.15,44,West End
+Kijiji,2200,0,1.0,,South Parkdale,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-king-and-jameson-id-2358/1735549033,2200.0,0.0,0.0,0.15,0.15,45,West End
+Kijiji,2299,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/scarborough-2-bedrooms-apartment-for-rent-10-macey-avenue/1726600425,2297.0,-0.087070091423596,-0.0034727606194849,0.15,0.146527239380515,46,Downtown
+Kijiji,2499,3,0.0,,Scarborough,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent-1350-danforth-road/1729944687,2449.0,-2.041649652919559,-0.081430493496907,0.15,0.068569506503093,47,Scarborough
+Kijiji,2995,3,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/3-bedroom-apartment-for-rent/1735111199,2895.0,-3.454231433506045,-0.137770831484577,0.15,0.0122291685154229,48,Downtown
+Kijiji,2395,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent/1719371541,2297.0,-4.266434479756204,-0.1701652703547642,0.15,-0.0201652703547642,49,Downtown
+Kijiji,2395,2,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/2-bedroom-apartment-for-rent/1687944850,2297.0,-4.266434479756204,-0.1701652703547642,0.15,-0.0201652703547642,50,Downtown
+Kijiji,1999,1,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/parkdale-1-bedroom-apartment-for-rent-140-146-jameson-avenue/1733036168,1912.0,-4.550209205020921,-0.1814835275725052,0.15,-0.0314835275725051,51,Downtown
+Kijiji,2025,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-one-bedroom-yonge-and-st-clair-id-2385/1734162033,1901.8333333333333,-6.476207168521607,-0.2583012932541072,0.15,-0.1083012932541072,52,Downtown
+Kijiji,1900,0,0.0,,City of Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/avenue-park-apartments-studio-apartment-for-rent/1728173049,1749.5,-8.6024578450986,-0.3431060694527093,0.15,-0.1931060694527093,53,Downtown
+Kijiji,2100,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-one-bedroom-yonge-and-st-clair-id-4391/1733462551,1901.8333333333333,-10.41977039698537,-0.4155889549108706,0.15,-0.2655889549108706,54,Downtown
+Kijiji,2250,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/two-bedroom-jameson-and-king-st-id-1607/1733732659,1901.8333333333333,-18.306896853912896,-0.7301642782243974,0.15,-0.5801642782243974,55,Downtown
+Kijiji,2350,0,0.0,,Birchcliffe-Cliffside,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/apartment-for-rent/1735988122,1975.0,-18.9873417721519,-0.7573035895212351,0.15,-0.6073035895212351,56,East End
+Kijiji,2350,0,0.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-dvp-and-eglinton-ave-e-id-350/1735063853,1901.8333333333333,-23.564981158531246,-0.9398811604334152,0.15,-0.7898811604334153,57,Downtown
+Kijiji,2400,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-at-st-clarens-and-dupont-id-2747/1732184575,1901.8333333333333,-26.19402331084042,-1.0447396015379242,0.15,-0.8947396015379242,58,Downtown
+Kijiji,2450,0,1.0,,Toronto,5,https://www.kijiji.ca/v-apartments-condos/city-of-toronto/renovated-two-bedroom-yonge-and-wellesley-id-914/1733190647,1901.8333333333333,-28.8230654631496,-1.1495980426424333,0.15,-0.9995980426424332,59,Downtown
