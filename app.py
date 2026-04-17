@@ -37,7 +37,7 @@ def _normalize_row(r: dict) -> dict:
             'pct_under': round(pct_under, 1),
             'pct_under_fmt': f"{pct_under:.1f}%",
             'days_ago': r.get('days_ago', ''),
-            'is_stale': bool(int(r.get('is_stale', 0))),
+            'is_stale': str(r.get('is_stale', '')).strip().lower() in ('true', '1', 'yes', '1.0'),
             'commute_minutes': float(r['commute_minutes']) if r.get('commute_minutes', '') not in ('', 'None', 'nan', None) else None,
             'link': r.get('url') or r.get('link', ''),
             'final_score': round(final_score, 3) if final_score else 0,
