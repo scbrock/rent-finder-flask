@@ -244,6 +244,8 @@
 <script>
 let allDeals = [];
 let currentSort = 'score';
+let lastCommuteDest = null;   // Track last computed destination
+let commuteTimesCache = {};   // neighbourhood → {commute_minutes, walk_dist_km, source}
 
 // Parse URL params on load
 function parseQueryParams() {
@@ -311,6 +313,8 @@ function updateFilterCount() {
   if (document.getElementById('neighbourhood').value.trim()) count++;
   if (document.getElementById('region').value) count++;
   if (document.getElementById('hide_stale').checked) count++;
+  if (document.getElementById('commute_dest').value.trim()) count++;
+  if (document.getElementById('max_commute').value) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -332,6 +336,10 @@ function resetFilters() {
   document.getElementById('sort_by').selectedIndex = 0;
   document.getElementById('hide_stale').checked = false;
   document.getElementById('hide_stale_toggle').classList.remove('active');
+  document.getElementById('commute_dest').value = '';
+  document.getElementById('max_commute').value = '';
+  lastCommuteDest = null;
+  commuteTimesCache = {};
   loadDeals();
   history.replaceState({}, '', window.location.pathname);
   updateFilterCount();
@@ -352,6 +360,59 @@ async function loadDeals() {
   try {
     const res = await fetch('/api/deals?' + params.toString());
     allDeals = await res.json();
+
+    // MC-257: If commute destination is set, fetch live commute times
+    const commuteDest = document.getElementById('commute_dest').value.trim();
+    if (commuteDest) {
+      // Re-compute only if destination changed
+      if (commuteDest !== lastCommuteDest) {
+        lastCommuteDest = commuteDest;
+        try {
+          const cr = await fetch('/api/commute', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({destination: commuteDest})
+          });
+          if (cr.ok) {
+            const cdata = await cr.json();
+            if (cdata.times) {
+              commuteTimesCache = cdata.times;
+            }
+          }
+        } catch(e) {
+          console.warn('Commute API unavailable:', e.message);
+        }
+      }
+
+      // Merge computed commute times into deal data
+      if (Object.keys(commuteTimesCache).length > 0) {
+        allDeals = allDeals.map(d => {
+          const entry = commuteTimesCache[d.neighbourhood || ''];
+          if (entry && entry.commute_minutes != null) {
+            return {...d, commute_minutes: entry.commute_minutes};
+          }
+          return d;
+        });
+
+        // Apply max_commute filter against live times
+        const maxCommute = parseInt(document.getElementById('max_commute').value) || null;
+        if (maxCommute !== null) {
+          allDeals = allDeals.filter(d =>
+            d.commute_minutes == null || d.commute_minutes <= maxCommute
+          );
+          // Re-sort by commute when that filter is active
+          const sortBy = document.getElementById('sort_by').value;
+          if (sortBy === 'commute') {
+            allDeals.sort((a, b) => (a.commute_minutes || 999) - (b.commute_minutes || 999));
+          }
+        }
+      }
+    } else {
+      // Reset cache if destination cleared
+      lastCommuteDest = null;
+      commuteTimesCache = {};
+    }
+
     renderDeals(allDeals);
   } catch(e) {
     document.getElementById('loading').textContent = 'Error: ' + e.message;

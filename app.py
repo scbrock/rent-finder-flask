@@ -5,9 +5,10 @@ Falls back to deals_output.csv if SQLite is not yet populated.
 MC-252: Stale listing filter (days_ago <= 30) exposed in API.
 MC-254: Days-on-market badge + freshness sort + stale toggle.
 MC-255: Cautions column — red flag warning chips.
+MC-257: Commute time filter — user-specified destination via OpenRouteService.
 """
 
-import os, sys
+import os, sys, json, time, hashlib, math
 from flask import Flask, render_template, jsonify, request
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -156,7 +157,7 @@ def api_deals():
     # Parse filter params
     beds_min = request.args.get('beds_min', type=int)
     beds_max = request.args.get('beds_max', type=int)
-    baths_min = request.args.get('baths_min', type=int)
+    baths_min = request.args.get('baths_min', type=float)
     parking = request.args.get('has_parking', type=lambda v: v.lower() == 'true' if v else None)
     price_min = request.args.get('price_min', type=int)
     price_max = request.args.get('price_max', type=int)
@@ -242,6 +243,203 @@ def api_export_csv():
     writer.writeheader()
     writer.writerows(deals)
     return output.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=deals.csv"}
+
+
+# ── MC-257: Commute Time Helpers ────────────────────────────────────────────
+
+# In-memory cache for this request cycle (avoid redundant ORS calls per request)
+_commute_dest_cache: dict = {}
+
+# Persistent file cache keyed by f"nh_lower|dest_lower"
+COMMUTE_CACHE_FILE = os.path.join(DATA_DIR, 'commute_cache.json')
+
+
+def _load_commute_cache() -> dict:
+    """Load persistent commute cache from disk."""
+    if os.path.exists(COMMUTE_CACHE_FILE):
+        try:
+            with open(COMMUTE_CACHE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_commute_cache(cache: dict):
+    """Persist commute cache to disk."""
+    try:
+        with open(COMMUTE_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Straight-line distance in km between two lat/lon points."""
+    R = 6371  # Earth radius km
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+# Known Toronto destination shortcuts (avoid API calls)
+_KNOWN_DESTINATIONS = {
+    "union station": (43.6455, -79.3833),
+    "union station, toronto": (43.6455, -79.3833),
+    "toronto union station": (43.6455, -79.3833),
+    "king station": (43.6475, -79.3791),
+    "yonge and dundas": (43.6561, -79.3802),
+    "yonge and bay": (43.6707, -79.3864),
+    "billy bishop airport": (43.6275, -79.0951),
+    "u of t": (43.6629, -79.3958),
+    "st. michael's hospital": (43.6547, -79.3737),
+    "sick kids": (43.6537, -79.3903),
+}
+
+
+def _geocode_address(address: str, api_key: str) -> tuple:
+    """
+    Geocode a Toronto address string to (lat, lon).
+    Checks known shortcuts first, then tries Nominatim (no key), then ORS.
+    Returns None on failure.
+    """
+    addr_key = address.lower().strip()
+    if addr_key in _KNOWN_DESTINATIONS:
+        return _KNOWN_DESTINATIONS[addr_key]
+
+    # Nominatim (no key needed, 1 req/sec rate limit)
+    try:
+        time.sleep(1.1)
+        import requests as _requests
+        nom_url = "https://nominatim.openstreetmap.org/search"
+        params = {"q": address + ", Toronto, ON", "format": "json", "limit": "1", "accept-language": "en"}
+        headers = {"User-Agent": "RentFinderBot/1.0 (scbrock)"}
+        resp = _requests.get(nom_url, params=params, headers=headers, timeout=15)
+        data = resp.json()
+        if data:
+            return (float(data[0]["lat"]), float(data[0]["lon"]))
+    except Exception:
+        pass
+
+    # ORS geocoding fallback
+    if api_key:
+        try:
+            import requests as _requests
+            url = "https://api.openrouteservice.org/geocode/v1/search"
+            headers = {"Authorization": api_key}
+            params = {"text": address, "size": 1, "lang": "en",
+                      "filters": {"place_type": "locality", "locality": "Toronto"}}
+            resp = _requests.get(url, params=params, headers=headers, timeout=15)
+            data = resp.json()
+            if data.get("features"):
+                coords = data["features"][0]["geometry"]["coordinates"]
+                return (coords[1], coords[0])
+        except Exception:
+            pass
+
+    return None
+
+
+def _compute_commute_minutes(nbhd_lat: float, nbhd_lon: float,
+                              dest_lat: float, dest_lon: float,
+                              api_key: str) -> float:
+    """
+    Compute walking commute time from neighbourhood centroid to destination.
+    Uses ORS foot-walking if api_key available, else Haversine estimate.
+    Returns minutes (float).
+    """
+    if api_key:
+        try:
+            import requests as _requests
+            url = "https://api.openrouteservice.org/v2/directions/foot-walking"
+            headers = {"Authorization": api_key, "Content-Type": "application/json"}
+            body = {"coordinates": [[nbhd_lon, nbhd_lat], [dest_lon, dest_lat]]}
+            resp = _requests.post(url, json=body, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                duration_sec = data["routes"][0]["summary"]["duration"]
+                return round(duration_sec / 60, 1)
+        except Exception:
+            pass
+
+    # Fallback: Haversine estimate at 5 km/h walking speed
+    dist_km = _haversine(nbhd_lat, nbhd_lon, dest_lat, dest_lon)
+    return round(dist_km / 5.0 * 60, 1)
+
+
+@app.route('/api/commute', methods=['POST'])
+def api_commute():
+    """
+    MC-257: Compute walking commute times from each neighbourhood to a user-specified
+    destination, using OpenRouteService. Results cached by neighbourhood+destination.
+
+    POST body: {"destination": "Union Station, Toronto"}
+    Returns:  {neighbourhood: {commute_minutes, walk_dist_km, source}, ...}
+    """
+    import requests as _requests
+    data = request.get_json(force=True) or {}
+    destination = (data.get('destination') or '').strip()
+    if not destination:
+        return jsonify({'error': 'destination required'}), 400
+
+    api_key = os.environ.get('ORS_API_KEY', '')
+
+    # Geocode destination
+    dest_coords = _geocode_address(destination, api_key)
+    if dest_coords is None:
+        return jsonify({'error': f'Could not geocode destination: {destination}'}), 400
+    dest_lat, dest_lon = dest_coords
+
+    # Load persistent cache
+    cache = _load_commute_cache()
+
+    # Get unique neighbourhoods from active listings
+    deals = load_deals()
+    neighbourhoods = list({d['neighbourhood'] for d in deals if d.get('neighbourhood')})
+
+    # Try to load neighbourhood coords (lazy import to avoid top-level dep)
+    try:
+        from neighbourhood_coords import neighbourhood_centroid
+    except Exception:
+        neighbourhood_centroid = None
+
+    results = {}
+    cache_dirty = False
+
+    for nbhd in sorted(neighbourhoods):
+        cache_key = f"{nbhd.lower()}|{destination.lower()}"
+        if cache_key in cache:
+            results[nbhd] = cache[cache_key]
+            continue
+
+        # Get neighbourhood centroid
+        if neighbourhood_centroid:
+            coords = neighbourhood_centroid(nbhd)
+        else:
+            coords = None
+
+        if coords:
+            nbhd_lat, nbhd_lon = coords
+            minutes = _compute_commute_minutes(nbhd_lat, nbhd_lon, dest_lat, dest_lon, api_key)
+            dist_km = round(_haversine(nbhd_lat, nbhd_lon, dest_lat, dest_lon), 2)
+            source = 'ors' if api_key else 'estimate'
+        else:
+            minutes = None
+            dist_km = None
+            source = 'unavailable'
+
+        entry = {'commute_minutes': minutes, 'walk_dist_km': dist_km, 'source': source}
+        results[nbhd] = entry
+        cache[cache_key] = entry
+        cache_dirty = True
+
+    if cache_dirty:
+        _save_commute_cache(cache)
+
+    return jsonify({'destination': destination, 'dest_coords': [dest_lon, dest_lat],
+                    'times': results})
 
 
 if __name__ == '__main__':
