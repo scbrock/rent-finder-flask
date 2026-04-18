@@ -242,6 +242,39 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
     return pd.DataFrame(all_listings)
 
 
+def scrape_craigslist(pages: int = 5) -> pd.DataFrame:
+    """Scrape Toronto rental listings from Craigslist. MC-258."""
+    import scrape_craigslist as _cl
+
+    all_listings = []
+    try:
+        listings = _cl.scrape(pages=pages)
+        print(f"  Craigslist: got {len(listings)} total listings")
+        for lst in listings:
+            try:
+                beds_num = int(float(lst.beds)) if lst.beds not in (None, "") else 0
+            except (ValueError, TypeError):
+                beds_num = 0
+            try:
+                baths_num = float(lst.baths) if lst.baths not in (None, "") else 0.0
+            except (ValueError, TypeError):
+                baths_num = 0.0
+            all_listings.append({
+                "source": "Craigslist",
+                "price": int(lst.price),
+                "beds": beds_num,
+                "baths": baths_num,
+                "sqft": None,
+                "neighborhood": lst.location[:60] if lst.location else "Toronto",
+                "days_ago": lst.days_ago,
+                "is_stale": lst.is_stale,
+                "link": lst.url,
+            })
+    except Exception as e:
+        print(f"  Craigslist error: {e}")
+    return pd.DataFrame(all_listings)
+
+
 # ── Sample Data Fallback ────────────────────────────────────────────────────────
 
 def sample_data() -> pd.DataFrame:
@@ -542,7 +575,16 @@ def main():
         print(f"  Kijiji scrape failed: {e}")
         df_kijiji = pd.DataFrame()
 
-    # Fallback: sample data if too few listings
+    # Craigslist (secondary — MC-258)
+    df_cl = pd.DataFrame()
+    try:
+        sources_tried.append("Craigslist")
+        df_cl = scrape_craigslist(pages=5)
+        print(f"  Craigslist: got {len(df_cl)} listings")
+    except Exception as e:
+        print(f"  Craigslist scrape failed: {e}")
+
+    # Fallback: sample data if too few listings from both real sources
     if len(df_kijiji) < 30:
         sources_tried.append("Sample")
         print(f"  Kijiji returned {len(df_kijiji)} < 30; generating sample data...")
@@ -580,7 +622,21 @@ def main():
         df_sample = pd.DataFrame(sample_rows)
         df = df_sample
     else:
-        df = df_kijiji
+        # Combine Kijiji + Craigslist
+        frames = [df_kijiji, df_cl]
+        df = pd.concat(frames, ignore_index=True)
+
+        # Cross-source deduplication: hash (price, beds, neighbourhood_lower)
+        # Listings within ~5% price and same beds/neighbourhood are considered duplicates
+        if len(df) > 0:
+            df["_nb_norm"] = df["neighborhood"].str.lower().str.strip()
+            df["_dedup_key"] = (
+                df["beds"].astype(str) + "|" +
+                df["_nb_norm"] + "|" +
+                (df["price"] // 50 * 50).astype(str)  # round to nearest $50
+            )
+            df = df.drop_duplicates(subset=["_dedup_key"]).reset_index(drop=True)
+            df = df.drop(columns=["_nb_norm", "_dedup_key"])
 
     df = df[df["price"] > 800].copy()
     df = df.drop_duplicates(subset=["link"]).reset_index(drop=True)
@@ -653,6 +709,20 @@ def main():
         comm_str = f" | {row['commute_minutes']:.0f}min" if pd.notna(row.get("commute_minutes")) else ""
         stale_str = " [STALE]" if row.get("is_stale") else ""
         print(f"  {row['rank']:<3} ${row['price']:>7,} ${row['fair_value']:>7,} {row['pct_under']:>+6.1f}% {str(row['neighborhood'])[:30]:<30} {row['beds']:>3} {str(row['region']):<12}{comm_str}{stale_str} {row['final_score']:>6.3f}  {row['link'][:55]}")
+
+    # ── SQLite Persistence (MC-262) ─────────────────────────────────────────────
+    try:
+        from persist import upsert_listings
+        scored_rows = scored.rename(columns={
+            "neighborhood": "neighborhood",
+            "link": "url",
+        }).to_dict("records")
+        for r in scored_rows:
+            r["listing_id"] = r.get("link", "") or r.get("listing_id", "")
+        stats = upsert_listings(scored_rows, scored)
+        print(f"\n  SQLite: {stats['total_active']} active listings, {stats['inactive_this_run']} marked inactive")
+    except Exception as e:
+        print(f"\n  SQLite persistence skipped: {e}")
 
     # Save
     out_dir = os.path.dirname(os.path.abspath(__file__))

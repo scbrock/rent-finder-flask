@@ -26,13 +26,13 @@
       display: none;
     }
     .filter-badge.active { display: inline; }
-    .parking-toggle {
+    .toggle-btn {
       display: flex; align-items: center; gap: 6px; cursor: pointer;
       padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.85rem;
       background: white; user-select: none;
     }
-    .parking-toggle input { cursor: pointer; }
-    .parking-toggle.active { background: #e8f5e9; border-color: #2d6a4f; color: #2d6a4f; }
+    .toggle-btn input { cursor: pointer; }
+    .toggle-btn.active { background: #e8f5e9; border-color: #2d6a4f; color: #2d6a4f; }
     .price-range-wrap { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #555; }
     #price_min, #price_max { width: 80px; }
     #filter_apply {
@@ -65,8 +65,31 @@
     .pct-good { color: #2d6a4f; font-weight: 700; }
     .pct-mid { color: #b56b00; }
     .pct-bad { color: #999; }
-    .stale-tag { background: #fff3cd; color: #856404; padding: 1px 6px; border-radius: 8px;
-                 font-size: 0.7rem; font-weight: 600; }
+
+    /* ── Days-on-market badges (MC-254) ── */
+    .age-badge {
+      display: inline-block; padding: 1px 7px; border-radius: 8px;
+      font-size: 0.72rem; font-weight: 700;
+    }
+    .age-fresh { background: #d4edda; color: #155724; }      /* green: <= 3d */
+    .age-medium { background: #fff3cd; color: #856404; }     /* yellow: 4-14d */
+    .age-stale { background: #f8d7da; color: #721c24; }     /* red: > 14d */
+    .age-neutral { background: #eee; color: #555; }
+    .stale-tag { background: #f8d7da; color: #721c24; padding: 1px 6px; border-radius: 8px;
+                 font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
+
+    /* ── Cautions column (MC-255) ── */
+    .cautions-cell { min-width: 160px; }
+    .caution-chip {
+      display: inline-block; background: #fff3cd; color: #856404;
+      border: 1px solid #ffeeba; padding: 1px 6px; border-radius: 8px;
+      font-size: 0.68rem; font-weight: 600; margin: 1px 2px;
+    }
+    .clean-badge {
+      display: inline-block; background: #d4edda; color: #155724;
+      padding: 1px 7px; border-radius: 8px; font-size: 0.7rem; font-weight: 700;
+    }
+
     .parking-icon { color: #2d6a4f; font-size: 0.9rem; }
     .link-btn { display: inline-block; padding: 3px 9px; background: #40916c; color: white;
                 border-radius: 4px; text-decoration: none; font-size: 0.75rem; font-weight: 600; }
@@ -126,7 +149,7 @@
     </div>
 
     <!-- Parking -->
-    <label class="parking-toggle" id="parking_toggle">
+    <label class="toggle-btn" id="parking_toggle">
       <input type="checkbox" id="has_parking">
       <span>🚗 Parking</span>
     </label>
@@ -175,6 +198,12 @@
       </select>
     </div>
 
+    <!-- Hide stale toggle (MC-252) -->
+    <label class="toggle-btn" id="hide_stale_toggle">
+      <input type="checkbox" id="hide_stale">
+      <span>🚫 Hide Stale (&gt;30d)</span>
+    </label>
+
     <div style="display:flex;gap:6px;align-items:flex-end;">
       <button id="filter_apply" onclick="loadDeals()">Filter</button>
       <button id="filter_reset" onclick="resetFilters()">Reset</button>
@@ -204,6 +233,7 @@
         <th onclick="sortTable('pct')">% Under</th>
         <th onclick="sortTable('commute')" title="Walking commute time">↳ Min</th>
         <th onclick="sortTable('days_ago')">Age</th>
+        <th class="cautions-cell">Cautions</th>
         <th>Link</th>
       </tr>
     </thead>
@@ -234,6 +264,10 @@ function parseQueryParams() {
   }
   if (params.get('commute_dest')) document.getElementById('commute_dest').value = params.get('commute_dest');
   if (params.get('max_commute')) document.getElementById('max_commute').value = params.get('max_commute');
+  if (params.get('hide_stale') === 'true') {
+    document.getElementById('hide_stale').checked = true;
+    document.getElementById('hide_stale_toggle').classList.add('active');
+  }
   updateFilterCount();
 }
 
@@ -247,6 +281,7 @@ function buildParams() {
   const neighbourhood = document.getElementById('neighbourhood').value.trim();
   const region = document.getElementById('region').value;
   const sortBy = document.getElementById('sort_by').value;
+  const hideStale = document.getElementById('hide_stale').checked;
 
   if (bedsMin) params.set('beds_min', bedsMin);
   if (bathsMin) params.set('baths_min', bathsMin);
@@ -256,6 +291,8 @@ function buildParams() {
   if (neighbourhood) params.set('neighbourhood', neighbourhood);
   if (region) params.set('region', region);
   if (sortBy !== 'score') params.set('sort', sortBy);
+  if (hideStale) params.set('hide_stale', 'true');
+
   const commuteDest = document.getElementById('commute_dest').value.trim();
   const maxCommute = document.getElementById('max_commute').value;
   if (commuteDest) params.set('commute_dest', commuteDest);
@@ -273,6 +310,7 @@ function updateFilterCount() {
   if (document.getElementById('has_parking').checked) count++;
   if (document.getElementById('neighbourhood').value.trim()) count++;
   if (document.getElementById('region').value) count++;
+  if (document.getElementById('hide_stale').checked) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -292,6 +330,8 @@ function resetFilters() {
   document.getElementById('neighbourhood').value = '';
   document.getElementById('region').selectedIndex = 0;
   document.getElementById('sort_by').selectedIndex = 0;
+  document.getElementById('hide_stale').checked = false;
+  document.getElementById('hide_stale_toggle').classList.remove('active');
   loadDeals();
   history.replaceState({}, '', window.location.pathname);
   updateFilterCount();
@@ -304,12 +344,6 @@ async function loadDeals() {
   // Update URL (no reload)
   const newUrl = params.toString() ? '?' + params.toString() : window.location.pathname;
   history.replaceState({}, '', newUrl);
-
-  // Add commute params to URL
-  const commuteDest = document.getElementById('commute_dest').value.trim();
-  const maxCommute = document.getElementById('max_commute').value;
-  if (commuteDest) params.set('commute_dest', commuteDest);
-  if (maxCommute) params.set('max_commute', maxCommute);
 
   document.getElementById('loading').style.display = 'block';
   document.getElementById('no_deals').style.display = 'none';
@@ -357,10 +391,25 @@ function renderDeals(deals) {
     const link = d.link || '#';
     const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
     const baths = d.baths !== undefined && d.baths !== null ? d.baths : '—';
-    const days = d.days_ago !== undefined && d.days_ago !== null ? d.days_ago : '—';
     const commute = d.commute_minutes !== undefined && d.commute_minutes !== null && d.commute_minutes !== '' ? d.commute_minutes + ' min' : '—';
     const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
-    const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">STALE</span>' : '';
+
+    // MC-254: days_ago badge with colour coding
+    const daysAgo = d.days_ago;
+    const daysAgoClass = d.days_ago_class || 'age-neutral';
+    const daysAgoStr = d.days_ago_str || (daysAgo !== null && daysAgo !== undefined ? daysAgo + 'd' : '—');
+
+    // MC-252: May be stale warning badge (>30 days)
+    const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">⚠️ Stale</span>' : '';
+
+    // MC-255: Cautions column
+    const cautions = d.cautions || [];
+    let cautionsHtml = '';
+    if (cautions.length > 0) {
+      cautionsHtml = cautions.map(c => `<span class="caution-chip">${c}</span>`).join('');
+    } else {
+      cautionsHtml = '<span class="clean-badge">✓ Clean</span>';
+    }
 
     const row = `<tr>
       <td>${i + 1}</td>
@@ -372,7 +421,8 @@ function renderDeals(deals) {
       <td>${d.fair_value_fmt || '—'}</td>
       <td class="${pctCls}"><strong>${pct}</strong></td>
       <td>${commute}</td>
-      <td>${days}d</td>
+      <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span></td>
+      <td>${cautionsHtml}</td>
       <td><a href="${link}" target="_blank" class="link-btn">View</a></td>
     </tr>`;
     tbody.insertRow(-1).innerHTML = row;
@@ -384,6 +434,13 @@ function renderDeals(deals) {
 // Parking toggle styling
 document.getElementById('has_parking').addEventListener('change', function() {
   document.getElementById('parking_toggle').classList.toggle('active', this.checked);
+  updateFilterCount();
+});
+
+// Hide stale toggle styling
+document.getElementById('hide_stale').addEventListener('change', function() {
+  document.getElementById('hide_stale_toggle').classList.toggle('active', this.checked);
+  updateFilterCount();
 });
 
 // Wire up all inputs to update filter count on change
