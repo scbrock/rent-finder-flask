@@ -220,6 +220,59 @@
 
   <div id="loading" class="loading">Loading deals…</div>
   <div id="no_deals" class="no-deals" style="display:none">No deals match your filters.</div>
+
+  <!-- MC-259: Listing Detail Modal -->
+  <div id="detail_modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;max-width:560px;width:95%;max-height:85vh;overflow-y:auto;padding:24px;position:relative;">
+      <button onclick="closeModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:1.4rem;cursor:pointer;color:#888;">✕</button>
+      <div id="modal_neighbourhood" style="font-size:1.25rem;font-weight:700;color:#2d6a4f;margin-bottom:4px;"></div>
+      <div id="modal_region" style="font-size:0.85rem;color:#666;margin-bottom:16px;"></div>
+
+      <!-- Price Hero -->
+      <div style="background:#e8f5e9;border-radius:8px;padding:16px;margin-bottom:16px;text-align:center;">
+        <div id="modal_price" style="font-size:2rem;font-weight:800;color:#2d6a4f;"></div>
+        <div id="modal_fair_value" style="font-size:0.9rem;color:#555;margin-top:4px;"></div>
+        <div id="modal_pct_under" style="font-size:1.5rem;font-weight:700;color:#2d6a4f;margin-top:6px;"></div>
+      </div>
+
+      <!-- Deal Breakdown -->
+      <div style="margin-bottom:16px;">
+        <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">📊 Deal Breakdown</div>
+        <div style="font-size:0.85rem;line-height:1.9;">
+          <div><strong>Segment:</strong> <span id="modal_segment"></span></div>
+          <div><strong>Deal Score:</strong> <span id="modal_score"></span></div>
+          <div><strong>Listed Price:</strong> <span id="modal_listed_price"></span></div>
+          <div><strong>Fair Value:</strong> <span id="modal_fair"></span></div>
+          <div><strong>Savings:</strong> <span id="modal_savings"></span></div>
+        </div>
+      </div>
+
+      <!-- Listing Details -->
+      <div style="margin-bottom:16px;">
+        <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">🏠 Listing Details</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:0.85rem;">
+          <div><strong>BD:</strong> <span id="modal_beds">—</span></div>
+          <div><strong>BA:</strong> <span id="modal_baths">—</span></div>
+          <div><strong>Sqft:</strong> <span id="modal_sqft">—</span></div>
+          <div><strong>Commute:</strong> <span id="modal_commute">—</span></div>
+          <div><strong>Age:</strong> <span id="modal_age">—</span></div>
+          <div><strong>Status:</strong> <span id="modal_status">—</span></div>
+        </div>
+      </div>
+
+      <!-- Cautions -->
+      <div style="margin-bottom:16px;">
+        <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">⚠️ Caution Flags</div>
+        <div id="modal_cautions"></div>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:10px;">
+        <a id="modal_link" href="#" target="_blank" style="flex:1;text-align:center;padding:10px;background:#2d6a4f;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:0.9rem;">View on Kijiji →</a>
+        <button onclick="closeModal()" style="padding:10px 16px;background:#eee;color:#333;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;">Close</button>
+      </div>
+    </div>
+  </div>
   <table id="deals_table" style="display:none">
     <thead>
       <tr>
@@ -513,6 +566,93 @@ document.getElementById('hide_stale').addEventListener('change', function() {
 // Init
 parseQueryParams();
 loadDeals();
+
+// ── MC-259: Listing Detail Modal ────────────────────────────────────────────
+
+function closeModal() {
+  document.getElementById('detail_modal').style.display = 'none';
+}
+
+// Close modal on background click
+document.getElementById('detail_modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// Close on Escape key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeModal();
+});
+
+async function openListingDetail(idx) {
+  const modal = document.getElementById('detail_modal');
+  modal.style.display = 'flex';
+
+  try {
+    const resp = await fetch('/api/listing/' + idx);
+    if (!resp.ok) {
+      closeModal();
+      return;
+    }
+    const d = resp.json();
+
+    document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '—';
+    document.getElementById('modal_region').textContent = d.region || '';
+
+    document.getElementById('modal_price').textContent = d.price_fmt || '—';
+    document.getElementById('modal_fair_value').textContent = d.fair_value_fmt ? `vs fair value ${d.fair_value_fmt}` : '';
+    document.getElementById('modal_pct_under').textContent = d.pct_under_fmt ? `${d.pct_under_fmt} under market` : '';
+
+    const bd = d.breakdown;
+    if (bd) {
+      document.getElementById('modal_segment').textContent = bd.segment || '—';
+      document.getElementById('modal_score').textContent = (bd.deal_score || 0).toFixed(3);
+      document.getElementById('modal_listed_price').textContent = bd.listed_price_fmt || '—';
+      document.getElementById('modal_fair').textContent = bd.fair_value || '—';
+      if (bd.listed_price && bd.fair_value) {
+        const savings = (bd.fair_value - bd.listed_price).toFixed(0);
+        document.getElementById('modal_savings').textContent = `$${parseFloat(savings).toLocaleString()}/mo`;
+      }
+    }
+
+    document.getElementById('modal_beds').textContent = d.beds != null ? d.beds : '—';
+    document.getElementById('modal_baths').textContent = d.baths != null ? d.baths : '—';
+    document.getElementById('modal_sqft').textContent = (d.sqft && d.sqft !== 'None') ? d.sqft : '—';
+    document.getElementById('modal_commute').textContent = d.commute_minutes != null ? `${d.commute_minutes} min` : '—';
+    document.getElementById('modal_age').textContent = d.days_ago_str || '—';
+    document.getElementById('modal_status').textContent = d.is_stale ? '⚠️ Stale' : '✓ Active';
+
+    // Render cautions
+    const cautionsEl = document.getElementById('modal_cautions');
+    if (d.cautions && d.cautions.length > 0) {
+      cautionsEl.innerHTML = d.cautions.map(c => `
+        <div style="margin-bottom:8px;padding:8px;background:#fff3cd;border-radius:6px;font-size:0.82rem;">
+          <div style="font-weight:700;color:#856404;margin-bottom:3px;">⚠️ ${c.flag}</div>
+          <div style="color:#555;">${c.detail}</div>
+        </div>
+      `).join('');
+    } else {
+      cautionsEl.innerHTML = '<div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">✓ No cautions — looks clean</div>';
+    }
+
+    document.getElementById('modal_link').href = d.link || '#';
+
+  } catch(e) {
+    closeModal();
+  }
+}
+
+// Make table rows clickable to open detail
+const tbody = document.getElementById('deals_body');
+if (tbody) {
+  tbody.addEventListener('click', function(e) {
+    // Ignore clicks on the link button itself
+    if (e.target.closest('.link-btn')) return;
+    const row = e.target.closest('tr');
+    if (!row) return;
+    const idx = parseInt(row.cells[0].textContent) - 1;
+    if (!isNaN(idx)) openListingDetail(idx);
+  });
+}
 </script>
 </body>
 </html>

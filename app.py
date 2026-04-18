@@ -245,6 +245,84 @@ def api_export_csv():
     return output.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=deals.csv"}
 
 
+# ── MC-259: Listing Detail Page ───────────────────────────────────────────────
+
+@app.route('/api/listing/<int:listing_idx>')
+def api_listing_detail(listing_idx: int):
+    """
+    MC-259: Return full detail for a single listing by its index in the current
+    deal list (0-based). Includes deal breakdown and expanded caution explanations.
+    """
+    deals = load_deals()
+    if listing_idx < 0 or listing_idx >= len(deals):
+        return jsonify({'error': 'Listing not found'}), 404
+
+    d = deals[listing_idx]
+
+    # Build detailed deal breakdown
+    breakdown = {
+        'listed_price': d['price'],
+        'listed_price_fmt': d['price_fmt'],
+        'fair_value': d.get('fair_value_fmt', '—'),
+        'pct_under': d['pct_under'],
+        'pct_under_fmt': d['pct_under_fmt'],
+        'deal_score': d.get('final_score', 0),
+        'segment': f"{d['beds']}BR in {d['neighbourhood']}, {d.get('region', 'Toronto')}",
+    }
+
+    # Expand caution explanations
+    caution_details = {
+        'Unusually cheap — verify condition': 'This listing is more than 25% below the market median for its segment. Unusually low prices may indicate hidden issues (condition, location, scams). Verify the property exists and visit in person.',
+        'Listing may be stale': 'This listing has been active for more than 30 days. It may already be rented or the price may have changed.',
+        'Size not disclosed': 'The listing does not disclose square footage. Neighbourhood averages may not be directly comparable.',
+        'Below typical basement threshold': 'A 1BR downtown listing under $1,100/mo is unusually cheap. Most basements in Downtown Toronto rent for $1,200–$1,800 for 1BR.',
+    }
+    expanded_cautions = []
+    for c in (d.get('cautions') or []):
+        expanded_cautions.append({
+            'flag': c,
+            'detail': caution_details.get(c, 'Review this listing carefully before contacting the landlord.')
+        })
+
+    # Freshness explanation
+    days = d.get('days_ago')
+    freshness_str = f"Listed {days} days ago" if days is not None else "Listing age unknown"
+    if days is not None:
+        if days == 0:
+            freshness_str = "Listed today — very fresh!"
+        elif days <= 3:
+            freshness_str = f"Listed {days} days ago — fresh listing"
+        elif days <= 14:
+            freshness_str = f"Listed {days} days ago — normal age"
+        elif days <= 30:
+            freshness_str = f"Listed {days} days ago — consider verifying availability"
+        else:
+            freshness_str = f"Listed {days} days ago — likely stale, verify availability"
+
+    result = {
+        'idx': listing_idx,
+        'neighbourhood': d.get('neighbourhood'),
+        'region': d.get('region'),
+        'beds': d.get('beds'),
+        'baths': d.get('baths'),
+        'sqft': d.get('sqft'),
+        'price': d['price'],
+        'price_fmt': d['price_fmt'],
+        'fair_value_fmt': d.get('fair_value_fmt'),
+        'pct_under': d['pct_under'],
+        'pct_under_fmt': d['pct_under_fmt'],
+        'days_ago': days,
+        'days_ago_str': freshness_str,
+        'days_ago_class': d.get('days_ago_class', 'age-neutral'),
+        'is_stale': d.get('is_stale'),
+        'commute_minutes': d.get('commute_minutes'),
+        'link': d.get('link'),
+        'cautions': expanded_cautions,
+        'breakdown': breakdown,
+    }
+    return jsonify(result)
+
+
 # ── MC-257: Commute Time Helpers ────────────────────────────────────────────
 
 # In-memory cache for this request cycle (avoid redundant ORS calls per request)
