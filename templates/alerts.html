@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Saved Searches — Toronto Rent Deals</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; }
+    .container { max-width: 900px; margin: 0 auto; padding: 16px; }
+    header { background: #2d6a4f; color: white; padding: 20px 24px; border-radius: 8px; margin-bottom: 16px; }
+    header h1 { font-size: 1.4rem; }
+    header p { margin-top: 4px; opacity: 0.85; font-size: 0.8rem; }
+    header a { color: #a8d5c2; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+
+    .card { background: white; border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+    /* Email bar */
+    .email-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+    .email-bar input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600; }
+    .btn-primary { background: #2d6a4f; color: white; }
+    .btn-primary:hover { background: #1e4f3a; }
+    .btn-secondary { background: #e9ecef; color: #333; }
+    .btn-danger { background: #e74c3c; color: white; }
+    .btn-danger:hover { background: #c0392b; }
+    .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+
+    /* Saved search cards */
+    .search-card { border-left: 4px solid #2d6a4f; }
+    .search-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .search-name { font-weight: 700; font-size: 1rem; color: #2d6a4f; }
+    .search-meta { font-size: 0.75rem; color: #888; margin-top: 2px; }
+    .search-stats { display: flex; gap: 16px; margin: 8px 0; font-size: 0.8rem; }
+    .search-stats .stat { display: flex; flex-direction: column; }
+    .search-stats .stat-label { color: #888; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .search-stats .stat-value { font-weight: 600; color: #333; }
+    .match-count-badge {
+      display: inline-block; background: #2d6a4f; color: white;
+      font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 12px;
+    }
+    .no-matches { background: #e9ecef; color: #666; }
+    .search-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+    /* Top match preview */
+    .top-match-preview { background: #f8f9fa; border-radius: 6px; padding: 10px; margin-top: 8px; font-size: 0.8rem; }
+    .top-match-preview .match-link { color: #2d6a4f; font-weight: 600; text-decoration: none; }
+    .top-match-preview .match-link:hover { text-decoration: underline; }
+
+    /* Add search form */
+    .add-form { display: none; }
+    .add-form.visible { display: block; }
+    .add-form h3 { margin-bottom: 12px; font-size: 1rem; color: #2d6a4f; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 3px; }
+    .form-group label { font-size: 0.75rem; font-weight: 600; color: #555; }
+    .form-group input, .form-group select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.85rem; }
+    .form-group.full { grid-column: 1 / -1; }
+    .score-hint { font-size: 0.7rem; color: #888; margin-top: 2px; }
+    .form-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+
+    .empty-state { text-align: center; padding: 40px; color: #888; }
+    .empty-state p { margin: 8px 0; font-size: 0.85rem; }
+
+    .msg { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem; }
+    .msg-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .msg-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+    .filter-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+    .filter-tag { background: #e8f4f0; color: #2d6a4f; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>🏠 My Saved Searches</h1>
+    <p>Track your perfect Toronto rental deals — get notified when new matches appear.</p>
+    <p style="margin-top:8px;"><a href="/">← Back to Deals</a></p>
+  </header>
+
+  <div id="msg-area"></div>
+
+  <!-- Email identity bar -->
+  <div class="card email-bar">
+    <input type="email" id="email-input" placeholder="your@email.com — used to identify your saved searches" />
+    <button class="btn btn-primary" onclick="loadSearches()">Load My Searches</button>
+  </div>
+
+  <!-- Saved searches list -->
+  <div id="searches-list"></div>
+
+  <!-- Add new search form -->
+  <div class="card add-form" id="add-form">
+    <h3>➕ New Saved Search</h3>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Search Name *</label>
+        <input type="text" id="f-name" placeholder="e.g. 1BR King West under $2,400" />
+      </div>
+      <div class="form-group">
+        <label>Min Beds</label>
+        <select id="f-beds-min">
+          <option value="">Any</option>
+          <option value="0">Studio</option>
+          <option value="1">1 BR</option>
+          <option value="2">2 BR</option>
+          <option value="3">3+ BR</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Max Beds</label>
+        <select id="f-beds-max">
+          <option value="">Any</option>
+          <option value="0">Studio</option>
+          <option value="1">1 BR</option>
+          <option value="2">2 BR</option>
+          <option value="3">3+ BR</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Min Baths</label>
+        <select id="f-baths-min">
+          <option value="">Any</option>
+          <option value="1">1+</option>
+          <option value="1.5">1.5+</option>
+          <option value="2">2+</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Region</label>
+        <select id="f-region">
+          <option value="">All Toronto</option>
+          <option value="Downtown">Downtown</option>
+          <option value="Midtown">Midtown</option>
+          <option value="East">East</option>
+          <option value="West">West</option>
+          <option value="North">North</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Neighbourhood</label>
+        <input type="text" id="f-neighbourhood" placeholder="e.g. King West" />
+      </div>
+      <div class="form-group">
+        <label>Min Price ($/mo)</label>
+        <input type="number" id="f-price-min" placeholder="e.g. 1000" />
+      </div>
+      <div class="form-group">
+        <label>Max Price ($/mo)</label>
+        <input type="number" id="f-price-max" placeholder="e.g. 2500" />
+      </div>
+      <div class="form-group full">
+        <label>Min Deal Score</label>
+        <input type="range" id="f-min-score" min="0" max="0.5" step="0.01" value="0.10"
+               oninput="scoreHint.innerText = `Alert if score > ${this.value} (i.e. >${(parseFloat(this.value)*100).toFixed(0)}% under market)`" />
+        <div class="score-hint" id="score-hint">Alert if score > 0.10 (i.e. >10% under market)</div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="hideAddForm()">Cancel</button>
+      <button class="btn btn-primary" onclick="createSearch()">💾 Save Search</button>
+    </div>
+  </div>
+
+  <!-- Floating add button -->
+  <button class="btn btn-primary" id="add-btn" onclick="showAddForm()" style="display:none; margin-bottom:12px;">
+    ➕ New Saved Search
+  </button>
+
+</div>
+
+<script>
+const API = '';
+
+function getEmail() {
+  return document.getElementById('email-input').value.trim();
+}
+
+function msg(type, text) {
+  const area = document.getElementById('msg-area');
+  area.innerHTML = `<div class="msg msg-${type}">${text}</div>`;
+  setTimeout(() => area.innerHTML = '', 4000);
+}
+
+async function loadSearches() {
+  const email = getEmail();
+  if (!email || !email.includes('@')) {
+    msg('error', 'Please enter a valid email address.');
+    return;
+  }
+  const res = await fetch(`${API}/api/saved-searches?email=${encodeURIComponent(email)}`);
+  const data = await res.json();
+  if (data.error) {
+    msg('error', data.error);
+    return;
+  }
+  document.getElementById('add-btn').style.display = 'inline-block';
+  renderSearches(data.searches || []);
+}
+
+function renderSearches(searches) {
+  const container = document.getElementById('searches-list');
+  if (!searches.length) {
+    container.innerHTML = `<div class="empty-state">
+      <p>No saved searches yet for this email.</p>
+      <p>Use the form below to create your first one!</p>
+    </div>`;
+    return;
+  }
+
+  container.innerHTML = searches.map(s => {
+    const lastChecked = s.last_checked
+      ? new Date(s.last_checked).toLocaleString('en-CA', { dateStyle: 'short', timeStyle: 'short' })
+      : 'Never';
+    const filters = buildFilterTags(s);
+    const topMatch = s.top_match;
+    const topMatchHtml = topMatch
+      ? `<div class="top-match-preview">
+          <strong>Top match:</strong>
+          <a class="match-link" href="${topMatch.link || '#'}" target="_blank">
+            ${topMatch.neighbourhood} ${topMatch.beds}BR — ${topMatch.price_fmt}
+            (${topMatch.pct_under > 0 ? '+' : ''}${topMatch.pct_under}% under FV)
+          </a>
+        </div>`
+      : '';
+
+    const badgeClass = s.match_count > 0 ? '' : 'no-matches';
+    return `<div class="card search-card">
+      <div class="search-card-header">
+        <div>
+          <div class="search-name">${escHtml(s.name)}</div>
+          <div class="filter-tags">${filters}</div>
+        </div>
+        <span class="match-count-badge ${badgeClass}">${s.match_count} match${s.match_count !== 1 ? 'es' : ''}</span>
+      </div>
+      <div class="search-stats">
+        <div class="stat">
+          <span class="stat-label">Last Checked</span>
+          <span class="stat-value">${lastChecked}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Min Deal Score</span>
+          <span class="stat-value">${s.min_score != null ? '>' + (parseFloat(s.min_score)*100).toFixed(0) + '%' : 'Any'}</span>
+        </div>
+      </div>
+      ${topMatchHtml}
+      <div class="search-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteSearch(${s.search_id})">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function buildFilterTags(s) {
+  const tags = [];
+  if (s.beds_min != null) tags.push(`Min ${int(s.beds_min)}BR`);
+  if (s.beds_max != null) tags.push(`Max ${int(s.beds_max)}BR`);
+  if (s.baths_min != null) tags.push(`${s.baths_min}+ baths`);
+  if (s.region) tags.push(s.region);
+  if (s.neighbourhood) tags.push(escHtml(s.neighbourhood));
+  if (s.price_min != null) tags.push(`$${int(s.price_min)}+`);
+  if (s.price_max != null) tags.push(`<$${int(s.price_max)}`);
+  if (!tags.length) tags.push('All filters');
+  return tags.map(t => `<span class="filter-tag">${t}</span>`).join('');
+}
+
+function int(v) { return v == null ? '' : parseInt(v); }
+
+function showAddForm() {
+  document.getElementById('add-form').classList.add('visible');
+  document.getElementById('add-btn').style.display = 'none';
+}
+
+function hideAddForm() {
+  document.getElementById('add-form').classList.remove('visible');
+  document.getElementById('add-btn').style.display = 'inline-block';
+}
+
+async function createSearch() {
+  const email = getEmail();
+  if (!email) { msg('error', 'Enter your email above first.'); return; }
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { msg('error', 'Search name is required.'); return; }
+
+  const body = {
+    email,
+    name,
+    beds_min: val('f-beds-min') || null,
+    beds_max: val('f-beds-max') || null,
+    baths_min: val('f-baths-min') || null,
+    price_min: val('f-price-min') || null,
+    price_max: val('f-price-max') || null,
+    neighbourhood: document.getElementById('f-neighbourhood').value.trim() || null,
+    region: document.getElementById('f-region').value || null,
+    min_score: parseFloat(document.getElementById('f-min-score').value) || null,
+  };
+
+  const res = await fetch(`${API}/api/saved-searches`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) { msg('error', data.error); return; }
+  msg('success', `✅ Saved search "${name}" created!`);
+  hideAddForm();
+  // Reset form
+  ['f-name','f-neighbourhood','f-price-min','f-price-max'].forEach(id => document.getElementById(id).value = '');
+  ['f-beds-min','f-beds-max','f-baths-min','f-region'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-min-score').value = '0.10';
+  loadSearches();
+}
+
+async function deleteSearch(searchId) {
+  const email = getEmail();
+  if (!confirm('Delete this saved search?')) return;
+  const res = await fetch(`${API}/api/saved-searches/${searchId}?email=${encodeURIComponent(email)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.error) { msg('error', data.error); return; }
+  msg('success', '✅ Saved search deleted.');
+  loadSearches();
+}
+
+function val(id) {
+  const v = document.getElementById(id).value;
+  return v === '' ? null : v;
+}
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Auto-load if email is in URL hash
+const hashEmail = location.hash.replace('#', '');
+if (hashEmail && hashEmail.includes('@')) {
+  document.getElementById('email-input').value = hashEmail;
+  loadSearches();
+}
+</script>
+</body>
+</html>

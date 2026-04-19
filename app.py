@@ -99,7 +99,7 @@ def _compute_cautions(d: dict) -> list[str]:
     has_parking = d.get('has_parking', False)
     if not has_parking:
         parking_walk = d.get('parking_walk_min')
-        if parking_walk is not None and parking_walk > MAX_PARKING_WALK_MIN:
+        if parking_walk is None or parking_walk > MAX_PARKING_WALK_MIN:
             cautions.append('No nearby parking available')
 
     return cautions
