@@ -18,7 +18,6 @@ import sqlite3, os, json
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
-import pandas as pd
 
 DATA_DIR = os.environ.get('RENT_DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 DB_PATH = os.path.join(DATA_DIR, "listings.db")
@@ -188,7 +187,7 @@ def init_db() -> None:
 
 # ── Upsert Listings ───────────────────────────────────────────────────────────
 
-def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) -> dict:
+def upsert_listings(rows: list[dict], scored_df=None) -> dict:
     """
     Upsert a list of listing dicts from the scraper.
     Listings not seen in a run are marked is_active = 0.
@@ -216,14 +215,15 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
             score = None
             pct_under = None
             if scored_df is not None:
+                import pandas as _pd
                 link_col = row.get("link", "")
                 try:
                     matches = scored_df[scored_df["link"] == link_col]
                     if not matches.empty:
                         sr = matches.iloc[0]
-                        fair_value = float(sr["fair_value"]) if "fair_value" in sr and pd.notna(sr["fair_value"]) else None
-                        score = float(sr["score"]) if "score" in sr and pd.notna(sr["score"]) else None
-                        pct_under = float(sr["pct_under"]) if "pct_under" in sr and pd.notna(sr["pct_under"]) else None
+                        fair_value = float(sr["fair_value"]) if "fair_value" in sr and _pd.notna(sr["fair_value"]) else None
+                        score = float(sr["score"]) if "score" in sr and _pd.notna(sr["score"]) else None
+                        pct_under = float(sr["pct_under"]) if "pct_under" in sr and _pd.notna(sr["pct_under"]) else None
                 except (KeyError, ValueError, TypeError):
                     pass
 
@@ -333,8 +333,9 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
 
 # ── Query Active Listings ──────────────────────────────────────────────────────
 
-def get_active_listings(region: Optional[str] = None) -> pd.DataFrame:
-    """Return all currently-active listings, optionally filtered by region."""
+def get_active_listings(region: Optional[str] = None):
+    """Return all currently-active listings as a DataFrame, optionally filtered by region."""
+    import pandas as pd
     conn = _get_conn()
     try:
         query = "SELECT * FROM listings WHERE is_active = 1"
@@ -347,8 +348,9 @@ def get_active_listings(region: Optional[str] = None) -> pd.DataFrame:
         conn.close()
 
 
-def get_listing_history(listing_id: str) -> pd.DataFrame:
-    """Return historical data for a specific listing (all scrapes)."""
+def get_listing_history(listing_id: str):
+    """Return historical data for a specific listing as a DataFrame."""
+    import pandas as pd
     conn = _get_conn()
     try:
         return pd.read_sql_query(
@@ -359,11 +361,9 @@ def get_listing_history(listing_id: str) -> pd.DataFrame:
         conn.close()
 
 
-def get_price_trends(neighborhood: str, beds: float) -> pd.DataFrame:
-    """
-    Return historical price trend for a neighbourhood + bedroom count.
-    Useful for seeing how fair_value / prices change over time.
-    """
+def get_price_trends(neighborhood: str, beds: float):
+    """Return historical price trend for a neighbourhood + bedroom count as a DataFrame."""
+    import pandas as pd
     conn = _get_conn()
     try:
         return pd.read_sql_query("""
