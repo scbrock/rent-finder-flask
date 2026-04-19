@@ -65,6 +65,18 @@ MAX_STATION_WALK_MIN = 20
 MAX_PARKING_WALK_MIN = 15  # MC-269
 
 
+_ROOM_RENTAL_KEYWORDS = (
+    'room in', 'private room', 'master bedroom', 'bedroom in',
+    'looking for', 'roommate', 'room for rent', '1 room', 'one room',
+    'shared', 'room only',
+)
+
+
+def _is_room_rental(d: dict) -> bool:
+    title = (d.get('title') or '').lower()
+    return any(kw in title for kw in _ROOM_RENTAL_KEYWORDS)
+
+
 def _compute_cautions(d: dict) -> list[str]:
     """
     MC-255: Compute caution flags for a listing.
@@ -72,8 +84,15 @@ def _compute_cautions(d: dict) -> list[str]:
     """
     cautions = []
     pct_under = d.get('pct_under', 0)
-    if pct_under is not None and pct_under > 25:
+
+    # Room rental detection — must run before price cautions to avoid false positives
+    if _is_room_rental(d):
+        cautions.append('Possible room rental — confirm it\'s a full unit')
+
+    if pct_under is not None and pct_under > 20:
         cautions.append('Unusually cheap — verify condition')
+    if pct_under is not None and pct_under > 40:
+        cautions.append('Extremely cheap — likely room rental, scam, or data error')
     days_ago = d.get('days_ago')
     if days_ago is not None and days_ago > 30:
         cautions.append('Listing may be stale')
@@ -131,6 +150,8 @@ def _normalize_row(r: dict) -> dict:
         days_ago_raw = r.get('days_ago', '')
         days_ago = int(float(days_ago_raw)) if str(days_ago_raw) not in ('', 'None', 'nan') else None
         row_dict = {
+            'listing_id': r.get('listing_id') or r.get('url') or r.get('link', ''),
+            'title': r.get('title', ''),
             'neighbourhood': r.get('neighborhood', ''),
             'region': r.get('region', ''),
             'beds': beds,
@@ -398,6 +419,23 @@ def api_export_csv():
 
 # ── MC-259: Listing Detail Page ───────────────────────────────────────────────
 
+@app.route('/api/listing/detail')
+def api_listing_detail_by_id():
+    """
+    Look up a listing by listing_id (stable, survives re-sorts).
+    Query param: ?id=<listing_id>
+    """
+    listing_id = request.args.get('id', '').strip()
+    if not listing_id:
+        return jsonify({'error': 'id required'}), 400
+    deals = load_deals()
+    d = next((x for x in deals if x.get('listing_id') == listing_id), None)
+    if d is None:
+        return jsonify({'error': 'Listing not found'}), 404
+    idx = deals.index(d)
+    return _build_listing_detail_response(d, idx)
+
+
 @app.route('/api/listing/<int:listing_idx>')
 def api_listing_detail(listing_idx: int):
     """
@@ -407,10 +445,10 @@ def api_listing_detail(listing_idx: int):
     deals = load_deals()
     if listing_idx < 0 or listing_idx >= len(deals):
         return jsonify({'error': 'Listing not found'}), 404
+    return _build_listing_detail_response(deals[listing_idx], listing_idx)
 
-    d = deals[listing_idx]
 
-    # Build detailed deal breakdown
+def _build_listing_detail_response(d: dict, idx: int):
     breakdown = {
         'listed_price': d['price'],
         'listed_price_fmt': d['price_fmt'],
@@ -421,9 +459,10 @@ def api_listing_detail(listing_idx: int):
         'segment': f"{d['beds']}BR in {d['neighbourhood']}, {d.get('region', 'Toronto')}",
     }
 
-    # Expand caution explanations
     caution_details = {
-        'Unusually cheap — verify condition': 'This listing is more than 25% below the market median for its segment. Unusually low prices may indicate hidden issues (condition, location, scams). Verify the property exists and visit in person.',
+        'Possible room rental — confirm it\'s a full unit': 'The listing title suggests this may be a single room in a shared unit, not a full apartment. Check the listing description and photos carefully — room rentals are priced per room, making them appear as extreme deals when compared against whole-unit averages.',
+        'Extremely cheap — likely room rental, scam, or data error': 'This listing is more than 40% below fair market value. In Toronto, this almost always means it is a room rental, a scam post, or a data scraping error. Do not proceed without verifying the full listing.',
+        'Unusually cheap — verify condition': 'This listing is more than 20% below the market median for its segment. Unusually low prices may indicate hidden issues (condition, location, undisclosed problems). Verify the property in person before committing.',
         'Listing may be stale': 'This listing has been active for more than 30 days. It may already be rented or the price may have changed.',
         'Size not disclosed': 'The listing does not disclose square footage. Neighbourhood averages may not be directly comparable.',
         'Below typical basement threshold': 'A 1BR downtown listing under $1,100/mo is unusually cheap. Most basements in Downtown Toronto rent for $1,200–$1,800 for 1BR.',
@@ -435,23 +474,24 @@ def api_listing_detail(listing_idx: int):
             'detail': caution_details.get(c, 'Review this listing carefully before contacting the landlord.')
         })
 
-    # Freshness explanation
     days = d.get('days_ago')
-    freshness_str = f"Listed {days} days ago" if days is not None else "Listing age unknown"
-    if days is not None:
-        if days == 0:
-            freshness_str = "Listed today — very fresh!"
-        elif days <= 3:
-            freshness_str = f"Listed {days} days ago — fresh listing"
-        elif days <= 14:
-            freshness_str = f"Listed {days} days ago — normal age"
-        elif days <= 30:
-            freshness_str = f"Listed {days} days ago — consider verifying availability"
-        else:
-            freshness_str = f"Listed {days} days ago — likely stale, verify availability"
+    if days is None:
+        freshness_str = "Listing age unknown"
+    elif days == 0:
+        freshness_str = "Listed today — very fresh!"
+    elif days <= 3:
+        freshness_str = f"Listed {days} days ago — fresh listing"
+    elif days <= 14:
+        freshness_str = f"Listed {days} days ago — normal age"
+    elif days <= 30:
+        freshness_str = f"Listed {days} days ago — consider verifying availability"
+    else:
+        freshness_str = f"Listed {days} days ago — likely stale, verify availability"
 
-    result = {
-        'idx': listing_idx,
+    return jsonify({
+        'idx': idx,
+        'listing_id': d.get('listing_id', ''),
+        'title': d.get('title', ''),
         'neighbourhood': d.get('neighbourhood'),
         'region': d.get('region'),
         'beds': d.get('beds'),
@@ -470,8 +510,7 @@ def api_listing_detail(listing_idx: int):
         'link': d.get('link'),
         'cautions': expanded_cautions,
         'breakdown': breakdown,
-    }
-    return jsonify(result)
+    })
 
 
 # ── MC-257: Commute Time Helpers ────────────────────────────────────────────

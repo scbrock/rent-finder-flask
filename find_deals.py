@@ -368,13 +368,30 @@ def score_deals(df: pd.DataFrame) -> pd.DataFrame:
         df["final_score"] = np.nan
         return df
 
-    fair = active.groupby(["neighborhood", "beds"])["price"].transform("mean")
-    active["fair_value"] = fair
+    # Exclude likely room rentals from fair value calculation.
+    # Room rentals (e.g. "private room in 3BR") are priced per-room (~$900-1200)
+    # but classified as multi-bed, which drags down the neighbourhood mean and
+    # makes whole-unit listings look artificially cheap.
+    _room_kws = ['room in', 'private room', 'master bedroom', 'bedroom in',
+                 'looking for', 'roommate', 'room for rent', '1 room', 'one room',
+                 'shared', 'room only']
+    if 'title' in active.columns:
+        _is_room = active['title'].str.lower().str.contains(
+            '|'.join(_room_kws), na=False, regex=True
+        )
+        fv_base = active[~_is_room]
+    else:
+        fv_base = active
 
-    # If no group data, use global median by beds
-    active["fair_value"] = active["fair_value"].fillna(
-        active.groupby("beds")["price"].transform("median")
-    )
+    fv_means = fv_base.groupby(["neighborhood", "beds"])["price"].mean()
+    active["fair_value"] = active.set_index(["neighborhood", "beds"]).index.map(
+        lambda idx: fv_means.get(idx, np.nan)
+    ).values
+
+    # If no group data, use global median by beds (excluding room rentals)
+    fv_bed_median = fv_base.groupby("beds")["price"].median()
+    mask_no_fv = active["fair_value"].isna()
+    active.loc[mask_no_fv, "fair_value"] = active.loc[mask_no_fv, "beds"].map(fv_bed_median)
 
     # % under market
     active["pct_under"] = (active["fair_value"] - active["price"]) / active["fair_value"] * 100

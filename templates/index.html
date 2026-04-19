@@ -718,7 +718,7 @@ function renderDeals(deals) {
       cautionsHtml = '<span class="clean-badge">✓ Clean</span>';
     }
 
-    const row = `<tr>
+    const row = `<tr data-listing-id="${d.listing_id || d.link || ''}">
       <td style="font-size:1.1rem;font-weight:800;color:#2d6a4f;text-align:center;" title="Deal score - higher is better">${d.final_score ? d.final_score.toFixed(3) : (d.score || 0).toFixed(3)}</td>
       <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag}</td>
       <td>${d.region || '—'}</td>
@@ -827,17 +827,17 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeModal();
 });
 
-async function openListingDetail(idx) {
+async function openListingDetail(listingId) {
   const modal = document.getElementById('detail_modal');
   modal.style.display = 'flex';
 
   try {
-    const resp = await fetch('/api/listing/' + idx);
+    const resp = await fetch('/api/listing/detail?id=' + encodeURIComponent(listingId));
     if (!resp.ok) {
       closeModal();
       return;
     }
-    const d = resp.json();
+    const d = await resp.json();
 
     document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '—';
     document.getElementById('modal_region').textContent = d.region || '';
@@ -889,12 +889,11 @@ async function openListingDetail(idx) {
 const tbody = document.getElementById('deals_body');
 if (tbody) {
   tbody.addEventListener('click', function(e) {
-    // Ignore clicks on the link button itself
-    if (e.target.closest('.link-btn')) return;
+    if (e.target.closest('.link-btn') || e.target.closest('.star-btn')) return;
     const row = e.target.closest('tr');
     if (!row) return;
-    const idx = parseInt(row.cells[0].textContent) - 1;
-    if (!isNaN(idx)) openListingDetail(idx);
+    const listingId = row.getAttribute('data-listing-id');
+    if (listingId) openListingDetail(listingId);
   });
 }
 
