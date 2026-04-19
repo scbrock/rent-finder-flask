@@ -296,6 +296,7 @@ def api_deals():
     region = request.args.get('region', '').strip()
     sort_by = request.args.get('sort', 'score')
     max_commute = request.args.get('max_commute', type=int)
+    max_subway = request.args.get('max_subway', type=int)
     commute_dest = request.args.get('commute_dest', '').strip()
     hide_stale = request.args.get('hide_stale', type=lambda v: v.lower() == 'true' if v else False)
 
@@ -321,6 +322,10 @@ def api_deals():
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
+
+    # MC-270 AC5: Max subway walk filter
+    if max_subway is not None:
+        deals = [d for d in deals if d.get('station_walk_min') is not None and d['station_walk_min'] <= max_subway]
 
     # Sort
     reverse = sort_by not in ('price', 'days_ago')

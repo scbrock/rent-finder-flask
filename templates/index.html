@@ -80,6 +80,8 @@
     .age-neutral { background: #eee; color: #555; }
     .stale-tag { background: #f8d7da; color: #721c24; padding: 1px 6px; border-radius: 8px;
                  font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
+    .green-badge { background: #d4edda; color: #155724; padding: 1px 6px; border-radius: 8px;
+                   font-size: 0.7rem; font-weight: 700; }
     .new-tag { background: #c3f0ca; color: #0d5c26; padding: 1px 6px; border-radius: 8px;
                font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
 
@@ -225,6 +227,12 @@
     <div class="filter-group">
       <label>Max Commute (min)</label>
       <input id="max_commute" type="number" placeholder="e.g. 30" min="1" max="180" style="width:80px;">
+    </div>
+
+    <!-- Max subway walk (MC-270: AC5) -->
+    <div class="filter-group">
+      <label>Max Subway Walk</label>
+      <input id="max_subway" type="number" placeholder="e.g. 5" min="1" max="30" style="width:80px;" title="Maximum walk time to nearest TTC subway station (minutes)">
     </div>
 
     <!-- Sort -->
@@ -471,6 +479,7 @@ function parseQueryParams() {
   }
   if (params.get('commute_dest')) document.getElementById('commute_dest').value = params.get('commute_dest');
   if (params.get('max_commute')) document.getElementById('max_commute').value = params.get('max_commute');
+  if (params.get('max_subway')) document.getElementById('max_subway').value = params.get('max_subway');
   if (params.get('hide_stale') === 'true') {
     document.getElementById('hide_stale').checked = true;
     document.getElementById('hide_stale_toggle').classList.add('active');
@@ -502,8 +511,10 @@ function buildParams() {
 
   const commuteDest = document.getElementById('commute_dest').value.trim();
   const maxCommute = document.getElementById('max_commute').value;
+  const maxSubway = document.getElementById('max_subway').value;
   if (commuteDest) params.set('commute_dest', commuteDest);
   if (maxCommute) params.set('max_commute', maxCommute);
+  if (maxSubway) params.set('max_subway', maxSubway);
 
   return params;
 }
@@ -520,6 +531,7 @@ function updateFilterCount() {
   if (document.getElementById('hide_stale').checked) count++;
   if (document.getElementById('commute_dest').value.trim()) count++;
   if (document.getElementById('max_commute').value) count++;
+  if (document.getElementById('max_subway').value) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -543,7 +555,7 @@ function resetFilters() {
   document.getElementById('hide_stale_toggle').classList.remove('active');
   document.getElementById('commute_dest').value = '';
   document.getElementById('max_commute').value = '';
-  lastCommuteDest = null;
+  document.getElementById('max_subway').value = '';
   commuteTimesCache = {};
   loadDeals();
   history.replaceState({}, '', window.location.pathname);
@@ -677,13 +689,17 @@ function renderDeals(deals) {
 
     const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
 
-    // MC-270: TTC station walk time
+    // MC-270: TTC station walk time — green badge (≤5 min), red badge (>20 min)
     const stationName = d.station_name;
     const stationWalk = d.station_walk_min;
     let ttcHtml = '—';
     if (stationName) {
       const walkStr = stationWalk ? stationWalk + ' min' : '';
-      ttcHtml = `<span title="${stationName}">🚇 ${walkStr}</span>`;
+      if (stationWalk !== null && stationWalk <= 5) {
+        ttcHtml = `<span class="green-badge" title="${stationName}">🚇 Steps from subway</span>`;
+      } else {
+        ttcHtml = `<span title="${stationName}">🚇 ${walkStr}</span>`;
+      }
     } else if (stationWalk === null) {
       ttcHtml = '<span style="color:#888;" title="No TTC station within 20 min walk">—</span>';
     }

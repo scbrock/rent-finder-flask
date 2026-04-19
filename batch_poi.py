@@ -21,6 +21,8 @@ PARKING_RADIUS_M = 500
 POI_TYPES = {
     "fitness_centre": {"radius": OVERPASS_RADIUS_M, "threshold": 30},
     "parking": {"radius": PARKING_RADIUS_M, "threshold": 15},
+    # MC-270: TTC subway station — nearest entrance via Overpass
+    "station": {"radius": 1500, "threshold": 10},
 }
 
 
