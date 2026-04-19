@@ -151,7 +151,7 @@ HTML_TOO_EXPENSIVE = """
 
 class TestParseHtmlCards:
     def test_parses_valid_rental_card(self):
-        listings = parse_html_cards(HTML_RENTAL_CARD)
+        listings = parse_html_cards(HTML_RENTAL_CARD, {})
         assert len(listings) == 1
         lst = listings[0]
         assert lst.listing_id == "1234567"
@@ -164,34 +164,34 @@ class TestParseHtmlCards:
         assert lst.source == "kijiji"
 
     def test_extracts_beds_and_baths(self):
-        listings = parse_html_cards(HTML_BED_BATHS)
+        listings = parse_html_cards(HTML_BED_BATHS, {})
         assert len(listings) == 1
         lst = listings[0]
         assert "2" in lst.beds or "bed" in lst.beds.lower()
 
     def test_filters_non_rental_by_url(self):
-        listings = parse_html_cards(HTML_NON_RENTAL)
+        listings = parse_html_cards(HTML_NON_RENTAL, {})
         assert len(listings) == 0
 
     def test_filters_way_too_cheap(self):
-        listings = parse_html_cards(HTML_WRONG_PRICE)
+        listings = parse_html_cards(HTML_WRONG_PRICE, {})
         assert len(listings) == 0
 
     def test_filters_way_too_expensive(self):
-        listings = parse_html_cards(HTML_TOO_EXPENSIVE)
+        listings = parse_html_cards(HTML_TOO_EXPENSIVE, {})
         assert len(listings) == 0
 
     def test_multiple_cards_returns_only_rentals(self):
         html = HTML_RENTAL_CARD + HTML_NON_RENTAL + HTML_WRONG_PRICE + HTML_BED_BATHS
-        listings = parse_html_cards(html)
+        listings = parse_html_cards(html, {})
         assert len(listings) == 2  # only the two valid rental cards
 
     def test_empty_html_returns_empty(self):
-        assert parse_html_cards("") == []
-        assert parse_html_cards("<html></html>") == []
+        assert parse_html_cards("", {}) == []
+        assert parse_html_cards("<html></html>", {}) == []
 
     def test_listing_dataclass_fields(self):
-        listings = parse_html_cards(HTML_RENTAL_CARD)
+        listings = parse_html_cards(HTML_RENTAL_CARD, {})
         lst = listings[0]
         assert isinstance(lst, Listing)
         assert hasattr(lst, "listing_id")
