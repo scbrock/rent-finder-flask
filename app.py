@@ -996,5 +996,57 @@ def page_profile():
     return render_template('profile.html')
 
 
+@app.route('/api/price-drops/<email>', methods=['GET'])
+def api_price_drops(email: str):
+    """
+    MC-272: Check for price drops on shortlisted listings.
+    GET /api/price-drops/<email>
+    Returns: {drops: [{listing_id, address, price_from, price_to, drop_amount}]}
+    Optionally triggers email send if ?send=1 query param.
+    After each scrape run, call with ?send=1 to notify users of drops.
+    """
+    from persist import get_shortlisted_listings_with_prices, has_price_drop_alert
+    email = email.strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'valid email required'}), 400
+
+    shortlisted = get_shortlisted_listings_with_prices(email)
+    drops = []
+    for item in shortlisted:
+        lid = item['listing_id']
+        price_at_save = item.get('price_at_save')
+        if price_at_save is None:
+            continue
+        current = item['price']  # current price from JOIN with listings table
+        if current is None:
+            continue
+        if current < price_at_save:
+            drops.append({
+                'listing_id': lid,
+                'address': f"{item.get('neighborhood', 'Unknown')}, Toronto",
+                'price_from': price_at_save,
+                'price_to': current,
+                'drop_amount': price_at_save - current,
+                'already_sent': has_price_drop_alert(email, lid),
+            })
+
+    send = request.args.get('send', '0') == '1'
+    if send and drops:
+        from email_alerts import check_and_send_price_drops
+        try:
+            # Build minimal deal dicts with price + listing_id for check_and_send_price_drops
+            deal_dicts = [{'listing_id': d['listing_id'], 'price': d['price_to'],
+                           'pct_under': 0, 'score': 0, 'url': '',
+                           'neighborhood': d['address']} for d in drops]
+            sent = check_and_send_price_drops(deal_dicts, email)
+            for d in drops:
+                if d['listing_id'] in sent:
+                    d['alert_sent'] = True
+        except Exception as e:
+            return jsonify({'error': f'Failed to send alerts: {e}'}), 500
+
+    return jsonify({'email': email, 'drops': drops, 'count': len(drops)})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)

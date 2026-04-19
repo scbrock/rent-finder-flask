@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import pandas as pd
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.environ.get('RENT_DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 DB_PATH = os.path.join(DATA_DIR, "listings.db")
 
 
@@ -102,12 +102,31 @@ CREATE INDEX IF NOT EXISTS idx_listings_region   ON listings(region);
 CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen);
 
 CREATE TABLE IF NOT EXISTS saved_listings (
-    saved_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    saved_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    email          TEXT    NOT NULL,
+    listing_id     TEXT    NOT NULL,
+    note           TEXT,
+    price_at_save  REAL,   -- price when user saved the listing (for drop detection)
+    saved_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(email, listing_id)
+);
+
+CREATE TABLE IF NOT EXISTS price_history (
+    history_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id TEXT    NOT NULL,
+    price      REAL    NOT NULL,
+    seen_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(listing_id, seen_at)
+);
+
+CREATE TABLE IF NOT EXISTS price_drop_alerts (
+    alert_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     email        TEXT    NOT NULL,
     listing_id   TEXT    NOT NULL,
-    note         TEXT,
-    saved_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    UNIQUE(email, listing_id)
+    price_from   REAL    NOT NULL,
+    price_to     REAL    NOT NULL,
+    alerted_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(email, listing_id)  -- one alert per listing per user
 );
 
 CREATE TABLE IF NOT EXISTS user_profiles (
@@ -130,14 +149,22 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_email   ON user_profiles(email);
 _cached_conn = [None]
 
 def _get_conn() -> sqlite3.Connection:
-    """Return a single cached connection (created on first call)."""
-    if _cached_conn[0] is None:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _cached_conn[0] = conn
-    return _cached_conn[0]
+    """Return a single cached connection (created on first call).
+    If the cached connection is closed or broken, replace it with a new one.
+    """
+    if _cached_conn[0] is not None:
+        try:
+            # Test if connection is still open and usable
+            _cached_conn[0].execute("SELECT 1")
+            return _cached_conn[0]
+        except Exception:
+            _cached_conn[0] = None
+    os.makedirs(DATA_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    _cached_conn[0] = conn
+    return conn
 
 
 def _reset_conn() -> None:
@@ -152,6 +179,7 @@ def _reset_conn() -> None:
 
 def init_db() -> None:
     """Run schema creation. Idempotent."""
+    _reset_conn()  # ensure fresh conn for this init
     conn = _get_conn()
     conn.executescript(SCHEMA)
     conn.commit()
@@ -630,9 +658,10 @@ def update_saved_search_match_count(search_id: int, count: int) -> None:
 
 # ── Saved Listings / Shortlist (MC-271) ──────────────────────────────────────
 
-def upsert_saved_listing(email: str, listing_id: str, note: str = None) -> int:
+def upsert_saved_listing(email: str, listing_id: str, note: str = None, price_at_save: float = None) -> int:
     """
     Save (or update) a listing to the user's shortlist.
+    price_at_save: price at time of saving (used for drop detection).
     Returns the saved_id.
     """
     init_db()
@@ -640,12 +669,13 @@ def upsert_saved_listing(email: str, listing_id: str, note: str = None) -> int:
     try:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         conn.execute("""
-            INSERT INTO saved_listings (email, listing_id, note, saved_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO saved_listings (email, listing_id, note, price_at_save, saved_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(email, listing_id) DO UPDATE SET
                 note = excluded.note,
+                price_at_save = COALESCE(excluded.price_at_save, price_at_save),
                 saved_at = excluded.saved_at
-        """, (email, listing_id, note, now))
+        """, (email, listing_id, note, price_at_save, now))
         conn.commit()
         cur = conn.execute(
             "SELECT saved_id FROM saved_listings WHERE email=? AND listing_id=?",
@@ -660,12 +690,12 @@ def upsert_saved_listing(email: str, listing_id: str, note: str = None) -> int:
 def get_saved_listings(email: str) -> list[dict]:
     """
     Get all saved listings for an email, enriched with listing data.
-    Returns list of {saved_id, listing_id, note, saved_at, ...listing fields}.
+    Returns list of {saved_id, listing_id, note, saved_at, price_at_save, ...listing fields}.
     """
     conn = _get_conn()
     try:
         cur = conn.execute("""
-            SELECT sl.saved_id, sl.listing_id, sl.note, sl.saved_at,
+            SELECT sl.saved_id, sl.listing_id, sl.note, sl.saved_at, sl.price_at_save,
                    l.price, l.beds, l.baths, l.sqft, l.neighborhood,
                    l.region, l.url, l.days_ago, l.is_stale,
                    l.fair_value, l.score, l.pct_under
@@ -703,6 +733,96 @@ def is_listing_saved(email: str, listing_id: str) -> bool:
             (email, listing_id)
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+# ── Price History (MC-272) ─────────────────────────────────────────────────────
+
+def upsert_price_history(listing_id: str, price: float) -> None:
+    """
+    Record a price point for a listing. Called after each scrape.
+    Uses UNIQUE(listing_id, seen_at) to avoid duplicate entries per scrape run.
+    """
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            INSERT INTO price_history (listing_id, price, seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(listing_id, seen_at) DO NOTHING
+        """, (listing_id, price, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_listing_price_at_time(listing_id: str, at_iso: str) -> Optional[float]:
+    """
+    Get the price of a listing closest to (at or before) given ISO timestamp.
+    Returns None if no history before that time.
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute("""
+            SELECT price FROM price_history
+            WHERE listing_id = ? AND seen_at <= ?
+            ORDER BY seen_at DESC
+            LIMIT 1
+        """, (listing_id, at_iso)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def record_price_drop_alert(email: str, listing_id: str, price_from: float, price_to: float) -> None:
+    """
+    Record that we sent a price drop alert for (email, listing_id).
+    Prevents duplicate alerts for the same drop.
+    """
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            INSERT INTO price_drop_alerts (email, listing_id, price_from, price_to, alerted_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(email, listing_id) DO NOTHING
+        """, (email, listing_id, price_from, price_to, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def has_price_drop_alert(email: str, listing_id: str) -> bool:
+    """Check if we already sent a price drop alert for this email + listing."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM price_drop_alerts WHERE email=? AND listing_id=?",
+            (email, listing_id)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def get_shortlisted_listings_with_prices(email: str) -> list[dict]:
+    """
+    Get shortlisted listings for email with current price and price_at_save.
+    Returns list of {listing_id, price, price_at_save, ...}.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute("""
+            SELECT sl.listing_id, l.price,
+                   sl.price_at_save,
+                   sl.email, sl.saved_id
+            FROM saved_listings sl
+            JOIN listings l ON l.listing_id = sl.listing_id
+            WHERE sl.email = ? AND l.is_active = 1
+        """, (email,))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
         conn.close()
 
