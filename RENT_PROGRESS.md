@@ -74,3 +74,8 @@ All acceptance criteria met:
 ## Blockers
 
 - **MC-276 DEPLOY BLOCKED (2026-04-17):** GitHub Actions workflow `deploy.yml` uses `JorgeLNJunior/render-deploy@v1.5.0` which requires `RENDER_SERVICE_ID` GitHub secret in addition to `RENDER_API_KEY` (already set). Missing secret: `RENDER_SERVICE_ID`. User needs to add this from dashboard.render.com ??? rent-finder-flask service ??? Settings ??? General. Steps: dashboard.render.com -> rent-finder-flask -> Settings -> General -> copy SERVICE_ID -> add to GitHub secrets as RENDER_SERVICE_ID. Then push clean_build.
+
+
+## Step 13: Discord Posting (2026-04-18)
+**Bug fix:** rank column is float (1.0, 2.0) but medal[row["rank"] - 1] threw "list indices must be integers or slices, not float". Fixed: medal[int(row["rank"]) - 1]. Deployed to prod — top 3 deals now post to Discord successfully.
+**Next step:** Verify the Discord post actually appeared in channel 1485371628538822898.
