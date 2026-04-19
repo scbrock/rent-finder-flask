@@ -14,6 +14,14 @@ DEALS_CSV = os.path.join(APP_DIR, 'deals_output.csv')
 
 app = Flask(__name__, template_folder=os.path.join(APP_DIR, 'templates'))
 
+# Ensure data dir and DB schema exist on startup (important for Render cold boots)
+os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    from persist import init_db
+    init_db()
+except Exception:
+    pass
+
 
 def _days_ago_str(days_ago: int) -> str:
     if days_ago is None:

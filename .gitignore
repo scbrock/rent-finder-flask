@@ -1,6 +1,7 @@
 .env
 __pycache__/
 *.pyc
-data/
+data/listings.db
+data/raw_*.json
+data/commute_cache.json
 output/
-deals_output.csv

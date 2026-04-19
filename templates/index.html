@@ -417,6 +417,7 @@ let currentSort = 'score';
 let lastCommuteDest = null;   // Track last computed destination
 let commuteTimesCache = {};   // neighbourhood → {commute_minutes, walk_dist_km, source}
 let shortlistStatus = {};    // listing_id → bool (is saved)
+let userEmail = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email') || null;
 
 // MC-263: Alert subscription form
 document.getElementById('alert_form').addEventListener('submit', async function(e) {

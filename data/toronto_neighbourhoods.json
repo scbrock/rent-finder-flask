@@ -1,0 +1,562 @@
+{
+  "Yonge-St.Clair": {
+    "lat": 43.687859,
+    "lng": -79.397871
+  },
+  "York University Heights": {
+    "lat": 43.765738,
+    "lng": -79.488883
+  },
+  "Lansing-Westgate": {
+    "lat": 43.754272,
+    "lng": -79.424747
+  },
+  "Yorkdale-Glen Park": {
+    "lat": 43.714672,
+    "lng": -79.457108
+  },
+  "Stonegate-Queensway": {
+    "lat": 43.635518,
+    "lng": -79.501128
+  },
+  "Tam O'Shanter-Sullivan": {
+    "lat": 43.78013,
+    "lng": -79.302918
+  },
+  "The Beaches": {
+    "lat": 43.67105,
+    "lng": -79.2996
+  },
+  "Thistletown-Beaumond Heights": {
+    "lat": 43.737988,
+    "lng": -79.563491
+  },
+  "Thorncliffe Park": {
+    "lat": 43.707749,
+    "lng": -79.349984
+  },
+  "Danforth East York": {
+    "lat": 43.689468,
+    "lng": -79.331403
+  },
+  "Humewood-Cedarvale": {
+    "lat": 43.69137,
+    "lng": -79.427684
+  },
+  "Islington-City Centre West": {
+    "lat": 43.633465,
+    "lng": -79.543316
+  },
+  "Danforth": {
+    "lat": 43.684025,
+    "lng": -79.329819
+  },
+  "Rustic": {
+    "lat": 43.711609,
+    "lng": -79.498092
+  },
+  "Scarborough Village": {
+    "lat": 43.738652,
+    "lng": -79.216813
+  },
+  "South Parkdale": {
+    "lat": 43.636699,
+    "lng": -79.439338
+  },
+  "South Riverdale": {
+    "lat": 43.649295,
+    "lng": -79.335651
+  },
+  "St.Andrew-Windfields": {
+    "lat": 43.756245,
+    "lng": -79.379036
+  },
+  "Taylor-Massey": {
+    "lat": 43.694998,
+    "lng": -79.295901
+  },
+  "Humber Summit": {
+    "lat": 43.758919,
+    "lng": -79.556174
+  },
+  "Humbermede": {
+    "lat": 43.74343,
+    "lng": -79.542367
+  },
+  "Centennial Scarborough": {
+    "lat": 43.782377,
+    "lng": -79.150844
+  },
+  "Church-Yonge Corridor": {
+    "lat": 43.65965,
+    "lng": -79.379018
+  },
+  "Clairlea-Birchmount": {
+    "lat": 43.713593,
+    "lng": -79.281382
+  },
+  "Cliffcrest": {
+    "lat": 43.721122,
+    "lng": -79.235529
+  },
+  "Flemingdon Park": {
+    "lat": 43.71593,
+    "lng": -79.332646
+  },
+  "Corso Italia-Davenport": {
+    "lat": 43.677661,
+    "lng": -79.447469
+  },
+  "Ionview": {
+    "lat": 43.735365,
+    "lng": -79.27247
+  },
+  "Junction Area": {
+    "lat": 43.66789,
+    "lng": -79.47144
+  },
+  "Broadview North": {
+    "lat": 43.688825,
+    "lng": -79.355629
+  },
+  "Princess-Rosethorn": {
+    "lat": 43.666051,
+    "lng": -79.54456
+  },
+  "North Riverdale": {
+    "lat": 43.671995,
+    "lng": -79.35126
+  },
+  "Etobicoke West Mall": {
+    "lat": 43.645063,
+    "lng": -79.568939
+  },
+  "Forest Hill North": {
+    "lat": 43.704217,
+    "lng": -79.428143
+  },
+  "Glenfield-Jane Heights": {
+    "lat": 43.745636,
+    "lng": -79.513466
+  },
+  "Greenwood-Coxwell": {
+    "lat": 43.672613,
+    "lng": -79.324318
+  },
+  "Guildwood": {
+    "lat": 43.748829,
+    "lng": -79.195054
+  },
+  "Trinity-Bellwoods": {
+    "lat": 43.650176,
+    "lng": -79.415342
+  },
+  "Victoria Village": {
+    "lat": 43.72849,
+    "lng": -79.314874
+  },
+  "Waterfront Communities-The Island": {
+    "lat": 43.633881,
+    "lng": -79.377201
+  },
+  "West Hill": {
+    "lat": 43.76749,
+    "lng": -79.176676
+  },
+  "West Humber-Clairville": {
+    "lat": 43.716186,
+    "lng": -79.596364
+  },
+  "Westminster-Branson": {
+    "lat": 43.778814,
+    "lng": -79.452419
+  },
+  "Kennedy Park": {
+    "lat": 43.725556,
+    "lng": -79.260382
+  },
+  "Kingsview Village-The Westway": {
+    "lat": 43.698993,
+    "lng": -79.547863
+  },
+  "Bayview Woods-Steeles": {
+    "lat": 43.796802,
+    "lng": -79.382118
+  },
+  "Clanton Park": {
+    "lat": 43.741979,
+    "lng": -79.446302
+  },
+  "Keelesdale-Eglinton West": {
+    "lat": 43.685727,
+    "lng": -79.471437
+  },
+  "O'Connor-Parkview": {
+    "lat": 43.7068,
+    "lng": -79.312228
+  },
+  "Old East York": {
+    "lat": 43.696781,
+    "lng": -79.335488
+  },
+  "Casa Loma": {
+    "lat": 43.681852,
+    "lng": -79.408007
+  },
+  "Kensington-Chinatown": {
+    "lat": 43.653554,
+    "lng": -79.39724
+  },
+  "Kingsway South": {
+    "lat": 43.65352,
+    "lng": -79.510577
+  },
+  "Runnymede-Bloor West Village": {
+    "lat": 43.659269,
+    "lng": -79.485709
+  },
+  "Forest Hill South": {
+    "lat": 43.694526,
+    "lng": -79.414318
+  },
+  "Henry Farm": {
+    "lat": 43.771144,
+    "lng": -79.34124
+  },
+  "Annex": {
+    "lat": 43.671585,
+    "lng": -79.404
+  },
+  "Caledonia-Fairbank": {
+    "lat": 43.688569,
+    "lng": -79.455212
+  },
+  "Humber Heights-Westmount": {
+    "lat": 43.692233,
+    "lng": -79.522417
+  },
+  "Roncesvalles": {
+    "lat": 43.646123,
+    "lng": -79.442993
+  },
+  "University": {
+    "lat": 43.662506,
+    "lng": -79.40118
+  },
+  "Hillcrest Village": {
+    "lat": 43.802988,
+    "lng": -79.354803
+  },
+  "Mount Dennis": {
+    "lat": 43.688144,
+    "lng": -79.499989
+  },
+  "Dorset Park": {
+    "lat": 43.759276,
+    "lng": -79.278909
+  },
+  "Edenbridge-Humber Valley": {
+    "lat": 43.670887,
+    "lng": -79.522458
+  },
+  "Dovercourt-Wallace Emerson-Junction": {
+    "lat": 43.665677,
+    "lng": -79.43854
+  },
+  "Newtonbrook West": {
+    "lat": 43.78583,
+    "lng": -79.431421
+  },
+  "Niagara": {
+    "lat": 43.636681,
+    "lng": -79.41242
+  },
+  "Beechborough-Greenbrook": {
+    "lat": 43.693216,
+    "lng": -79.479472
+  },
+  "High Park North": {
+    "lat": 43.657565,
+    "lng": -79.466302
+  },
+  "High Park-Swansea": {
+    "lat": 43.645064,
+    "lng": -79.467872
+  },
+  "Highland Creek": {
+    "lat": 43.790775,
+    "lng": -79.177472
+  },
+  "North St.James Town": {
+    "lat": 43.669623,
+    "lng": -79.375247
+  },
+  "Oakridge": {
+    "lat": 43.697408,
+    "lng": -79.279708
+  },
+  "Rosedale-Moore Park": {
+    "lat": 43.682821,
+    "lng": -79.37967
+  },
+  "Oakwood Village": {
+    "lat": 43.688566,
+    "lng": -79.439786
+  },
+  "Wexford/Maryvale": {
+    "lat": 43.748574,
+    "lng": -79.298638
+  },
+  "Eglinton East": {
+    "lat": 43.740922,
+    "lng": -79.245597
+  },
+  "Elms-Old Rexdale": {
+    "lat": 43.721519,
+    "lng": -79.548983
+  },
+  "Agincourt North": {
+    "lat": 43.805441,
+    "lng": -79.266712
+  },
+  "Agincourt South-Malvern West": {
+    "lat": 43.788657,
+    "lng": -79.265611
+  },
+  "Englemount-Lawrence": {
+    "lat": 43.720345,
+    "lng": -79.437409
+  },
+  "Eringate-Centennial-West Deane": {
+    "lat": 43.658017,
+    "lng": -79.580443
+  },
+  "L'Amoreaux": {
+    "lat": 43.795716,
+    "lng": -79.314084
+  },
+  "Banbury-Don Mills": {
+    "lat": 43.737658,
+    "lng": -79.34972
+  },
+  "Bathurst Manor": {
+    "lat": 43.764814,
+    "lng": -79.456057
+  },
+  "Alderwood": {
+    "lat": 43.604937,
+    "lng": -79.541611
+  },
+  "Regent Park": {
+    "lat": 43.659992,
+    "lng": -79.360509
+  },
+  "Bendale": {
+    "lat": 43.760368,
+    "lng": -79.257402
+  },
+  "Birchcliffe-Cliffside": {
+    "lat": 43.694683,
+    "lng": -79.265089
+  },
+  "Weston-Pellam Park": {
+    "lat": 43.673962,
+    "lng": -79.460244
+  },
+  "Downsview-Roding-CFB": {
+    "lat": 43.733292,
+    "lng": -79.490494
+  },
+  "Lambton Baby Point": {
+    "lat": 43.65742,
+    "lng": -79.496046
+  },
+  "Bay Street Corridor": {
+    "lat": 43.657512,
+    "lng": -79.385722
+  },
+  "Black Creek": {
+    "lat": 43.76489,
+    "lng": -79.52198
+  },
+  "Willowdale East": {
+    "lat": 43.770603,
+    "lng": -79.401484
+  },
+  "Willowdale West": {
+    "lat": 43.77121,
+    "lng": -79.427557
+  },
+  "Rouge": {
+    "lat": 43.821202,
+    "lng": -79.186353
+  },
+  "Mount Olive-Silverstone-Jamestown": {
+    "lat": 43.746869,
+    "lng": -79.58726
+  },
+  "Cabbagetown-South St.James Town": {
+    "lat": 43.667648,
+    "lng": -79.366107
+  },
+  "Mount Pleasant East": {
+    "lat": 43.704853,
+    "lng": -79.384924
+  },
+  "Mount Pleasant West": {
+    "lat": 43.704435,
+    "lng": -79.39336
+  },
+  "Blake-Jones": {
+    "lat": 43.676173,
+    "lng": -79.337394
+  },
+  "Rexdale-Kipling": {
+    "lat": 43.723726,
+    "lng": -79.566229
+  },
+  "East End-Danforth": {
+    "lat": 43.684174,
+    "lng": -79.299359
+  },
+  "New Toronto": {
+    "lat": 43.600589,
+    "lng": -79.510358
+  },
+  "Palmerston-Little Italy": {
+    "lat": 43.659157,
+    "lng": -79.418409
+  },
+  "Parkwoods-Donalda": {
+    "lat": 43.755034,
+    "lng": -79.33018
+  },
+  "Pelmo Park-Humberlea": {
+    "lat": 43.717515,
+    "lng": -79.528283
+  },
+  "Playter Estates-Danforth": {
+    "lat": 43.6797,
+    "lng": -79.354887
+  },
+  "Willowridge-Martingrove-Richview": {
+    "lat": 43.683645,
+    "lng": -79.55422
+  },
+  "Woburn": {
+    "lat": 43.766741,
+    "lng": -79.228587
+  },
+  "Woodbine-Lumsden": {
+    "lat": 43.694107,
+    "lng": -79.311164
+  },
+  "Bayview Village": {
+    "lat": 43.776361,
+    "lng": -79.377117
+  },
+  "Bedford Park-Nortown": {
+    "lat": 43.731488,
+    "lng": -79.420226
+  },
+  "Rockcliffe-Smythe": {
+    "lat": 43.67479,
+    "lng": -79.49442
+  },
+  "Bridle Path-Sunnybrook-York Mills": {
+    "lat": 43.731014,
+    "lng": -79.378906
+  },
+  "Don Valley Village": {
+    "lat": 43.783294,
+    "lng": -79.353644
+  },
+  "Weston": {
+    "lat": 43.702716,
+    "lng": -79.515723
+  },
+  "Lawrence Park South": {
+    "lat": 43.717212,
+    "lng": -79.406038
+  },
+  "Brookhaven-Amesbury": {
+    "lat": 43.701326,
+    "lng": -79.485589
+  },
+  "Long Branch": {
+    "lat": 43.592362,
+    "lng": -79.533345
+  },
+  "Malvern": {
+    "lat": 43.803659,
+    "lng": -79.222516
+  },
+  "Dufferin Grove": {
+    "lat": 43.655428,
+    "lng": -79.437341
+  },
+  "Maple Leaf": {
+    "lat": 43.715574,
+    "lng": -79.480758
+  },
+  "Markland Wood": {
+    "lat": 43.633542,
+    "lng": -79.573432
+  },
+  "Steeles": {
+    "lat": 43.812959,
+    "lng": -79.321206
+  },
+  "Lawrence Park North": {
+    "lat": 43.73006,
+    "lng": -79.403978
+  },
+  "Yonge-Eglinton": {
+    "lat": 43.70469,
+    "lng": -79.40359
+  },
+  "Mimico": {
+    "lat": 43.615923,
+    "lng": -79.500135
+  },
+  "Morningside": {
+    "lat": 43.782399,
+    "lng": -79.207041
+  },
+  "Moss Park": {
+    "lat": 43.656518,
+    "lng": -79.367297
+  },
+  "Little Portugal": {
+    "lat": 43.647536,
+    "lng": -79.430323
+  },
+  "Woodbine Corridor": {
+    "lat": 43.676773,
+    "lng": -79.315408
+  },
+  "Newtonbrook East": {
+    "lat": 43.791536,
+    "lng": -79.405937
+  },
+  "Milliken": {
+    "lat": 43.82069,
+    "lng": -79.275007
+  },
+  "Pleasant View": {
+    "lat": 43.786983,
+    "lng": -79.334949
+  },
+  "Wychwood": {
+    "lat": 43.676919,
+    "lng": -79.425515
+  },
+  "Leaside-Bennington": {
+    "lat": 43.703798,
+    "lng": -79.366072
+  },
+  "Briar Hill-Belgravia": {
+    "lat": 43.699024,
+    "lng": -79.452851
+  }
+}
