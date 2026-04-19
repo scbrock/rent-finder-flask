@@ -947,5 +947,54 @@ def api_saved_listings_check():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/profile', methods=['GET', 'POST'])
+def api_profile():
+    """
+    MC-273: Get or create/update user profile.
+    GET ?email=x: returns profile dict
+    POST: body JSON with email, preferred_beds, max_price, neighbourhoods[], commute_dest, status
+    """
+    if request.method == 'GET':
+        email = request.args.get('email', '').strip()
+        if not email or '@' not in email:
+            return jsonify({'error': 'email required'}), 400
+        from persist import get_profile
+        profile = get_profile(email)
+        if profile is None:
+            return jsonify({'profile': None})
+        return jsonify({'profile': profile})
+
+    # POST
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({'error': 'invalid JSON'}), 400
+
+    email = data.get('email', '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'valid email required'}), 400
+
+    from persist import upsert_profile
+    try:
+        upsert_profile(
+            email=email,
+            preferred_beds=data.get('preferred_beds') or None,
+            max_price=float(data['max_price']) if data.get('max_price') not in (None, '') else None,
+            neighbourhoods=data.get('neighbourhoods') or None,
+            commute_dest=data.get('commute_dest') or None,
+            status=data.get('status') or None,
+        )
+        from persist import get_profile
+        return jsonify({'profile': get_profile(email)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/profile')
+def page_profile():
+    """MC-273: Serve the profile settings page."""
+    return render_template('profile.html')
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)

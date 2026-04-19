@@ -14,7 +14,7 @@ Inactivity tracking:
 
 from __future__ import annotations
 
-import sqlite3, os
+import sqlite3, os, json
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
@@ -110,7 +110,20 @@ CREATE TABLE IF NOT EXISTS saved_listings (
     UNIQUE(email, listing_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_profiles (
+    profile_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    email        TEXT    NOT NULL UNIQUE,
+    preferred_beds    TEXT,
+    max_price         REAL,
+    neighbourhoods    TEXT,   -- JSON array of neighbourhood names
+    commute_dest       TEXT,
+    status             TEXT,   -- 'actively_looking' | 'open_to_moving' | 'just_browsing'
+    created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_saved_listings_email ON saved_listings(email);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_email   ON user_profiles(email);
 """
 
 
@@ -140,11 +153,9 @@ def _reset_conn() -> None:
 def init_db() -> None:
     """Run schema creation. Idempotent."""
     conn = _get_conn()
-    try:
-        conn.executescript(SCHEMA)
-        conn.commit()
-    finally:
-        conn.close()
+    conn.executescript(SCHEMA)
+    conn.commit()
+    # Note: do NOT close conn — it is cached in _cached_conn and reused
 
 
 # ── Upsert Listings ───────────────────────────────────────────────────────────
@@ -364,6 +375,54 @@ def upsert_alert(email: str, region: Optional[str] = None,
         conn.commit()
     finally:
         conn.close()
+
+
+# ── User Profile ──────────────────────────────────────────────────────────────
+
+def upsert_profile(email: str,
+                   preferred_beds: Optional[str] = None,
+                   max_price: Optional[float] = None,
+                   neighbourhoods: Optional[list[str]] = None,
+                   commute_dest: Optional[str] = None,
+                   status: Optional[str] = None) -> None:
+    """
+    Create or update a user profile.
+    neighbourhoods: list of neighbourhood name strings, stored as JSON.
+    """
+    conn = _get_conn()
+    neighbourhoods_json = json.dumps(neighbourhoods) if neighbourhoods else None
+    conn.execute("""
+        INSERT INTO user_profiles (email, preferred_beds, max_price, neighbourhoods, commute_dest, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            preferred_beds  = excluded.preferred_beds,
+            max_price      = excluded.max_price,
+            neighbourhoods = excluded.neighbourhoods,
+            commute_dest   = excluded.commute_dest,
+            status         = excluded.status,
+            updated_at     = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    """, (email, preferred_beds, max_price, neighbourhoods_json, commute_dest, status))
+    conn.commit()
+
+
+def get_profile(email: str) -> Optional[dict]:
+    """Return user profile dict or None if not found."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM user_profiles WHERE email = ?", (email,)
+    ).fetchone()
+    if not row:
+        return None
+    cols = ['profile_id', 'email', 'preferred_beds', 'max_price', 'neighbourhoods',
+            'commute_dest', 'status', 'created_at', 'updated_at']
+    result = dict(zip(cols, row))
+    # Parse JSON neighbourhoods
+    if result.get('neighbourhoods') and isinstance(result['neighbourhoods'], str):
+        try:
+            result['neighbourhoods'] = json.loads(result['neighbourhoods'])
+        except Exception:
+            result['neighbourhoods'] = []
+    return result
 
 
 def get_pending_alerts(min_score: float = 0.5) -> list[dict]:

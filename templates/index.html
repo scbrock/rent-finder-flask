@@ -117,9 +117,12 @@
 </head>
 <body>
 <div class="container">
-  <header>
-    <h1>🏠 Toronto Rent Deals</h1>
-    <p>Find Toronto rentals priced below market. We score every listing — so you only look at the ones worth your time.</p>
+  <header style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h1>🏠 Toronto Rent Deals</h1>
+      <p>Find Toronto rentals priced below market. We score every listing — so you only look at the ones worth your time.</p>
+    </div>
+    <a href="/profile" id="profile_status_badge" style="color:#a8d5c2; font-size:0.8rem; text-decoration:none; white-space:nowrap; margin-top:4px; display:none;">⚙️ My Preferences</a>
   </header>
 
   <!-- MC-265: How It Works + Stats -->
@@ -758,8 +761,54 @@ document.getElementById('hide_stale').addEventListener('change', function() {
 
 // Init
 parseQueryParams();
+loadProfilePreferences();
 loadShortlistStatus();
 loadDeals();
+
+// ── MC-273: Profile preferences ───────────────────────────────────────────────
+async function loadProfilePreferences() {
+  // Pre-fill filters from saved profile
+  const email = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email');
+  if (!email) return;
+  try {
+    const resp = await fetch(`/api/profile?email=${encodeURIComponent(email)}`);
+    const data = await resp.json();
+    if (!data.profile) return;
+    const p = data.profile;
+    // Pre-fill from profile preferences
+    if (p.preferred_beds) {
+      const sel = document.getElementById('beds_min');
+      if (sel) sel.value = p.preferred_beds;
+    }
+    if (p.max_price) {
+      const inp = document.getElementById('price_max');
+      if (inp) inp.value = p.max_price;
+    }
+    if (p.neighbourhoods && Array.isArray(p.neighbourhoods) && p.neighbourhoods.length > 0) {
+      const inp = document.getElementById('neighbourhood');
+      if (inp) inp.value = p.neighbourhoods[0];
+    }
+    if (p.commute_dest) {
+      const inp = document.getElementById('commute_dest');
+      if (inp) inp.value = p.commute_dest;
+    }
+    // Show status badge
+    if (p.status) {
+      const badge = document.getElementById('profile_status_badge');
+      if (badge) {
+        badge.textContent = statusLabel(p.status);
+        badge.style.display = 'inline';
+      }
+    }
+  } catch(e) {
+    console.warn('Could not load profile preferences:', e.message);
+  }
+}
+
+function statusLabel(status) {
+  const map = { 'actively_looking': '🔴 Actively Looking', 'open_to_moving': '🟡 Open to Moving', 'just_browsing': '⚪ Just Browsing' };
+  return map[status] || '';
+}
 
 // ── MC-259: Listing Detail Modal ────────────────────────────────────────────
 
