@@ -15,7 +15,7 @@ Inactivity tracking:
 from __future__ import annotations
 
 import sqlite3, os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 import pandas as pd
@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS listings (
     last_seen       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     is_active       INTEGER NOT NULL DEFAULT 1,
     scrape_count    INTEGER NOT NULL DEFAULT 1,   -- how many runs this listing appeared in
+    is_new          INTEGER NOT NULL DEFAULT 0,   -- 1 for first 6 hrs after first_seen
     -- Computed fields (refreshed each run)
     fair_value      REAL,
     score           REAL,
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS user_alerts (
     max_price   REAL,
     min_score   REAL,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    is_enabled  INTEGER NOT NULL DEFAULT 1
+    is_enabled  INTEGER NOT NULL DEFAULT 1,
+    last_sent   TEXT    DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_listings_active    ON listings(is_active);
@@ -150,8 +152,9 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
                 INSERT INTO listings (
                     listing_id, source, title, price, price_str, beds, baths, sqft,
                     neighborhood, region, location, url, image_url, days_ago, is_stale,
-                    first_seen, last_seen, is_active, scrape_count, fair_value, score, pct_under
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    first_seen, last_seen, is_active, scrape_count, is_new,
+                    fair_value, score, pct_under
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(listing_id) DO UPDATE SET
                     source          = excluded.source,
                     title           = excluded.title,
@@ -170,6 +173,7 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
                     last_seen       = excluded.last_seen,
                     is_active       = 1,
                     scrape_count    = listings.scrape_count + 1,
+                    is_new          = 0,
                     fair_value      = excluded.fair_value,
                     score           = excluded.score,
                     pct_under       = excluded.pct_under
@@ -191,6 +195,7 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
                 1 if row.get("is_stale") else 0,
                 now, now, 1,  # first_seen, last_seen, is_active
                 1,  # scrape_count for new inserts
+                1,  # is_new = 1 for first 6 hrs after first_seen
                 fair_value, score, pct_under,
             ))
             upsert_count += 1
@@ -216,6 +221,18 @@ def upsert_listings(rows: list[dict], scored_df: Optional[pd.DataFrame] = None) 
             VALUES (?, ?, ?, ?)
         """, (",".join(sorted(run_sources)), len(rows), new_count, inactive))
 
+        conn.commit()
+
+        # Refresh is_new: mark listings first_seen within 6 hrs as is_new=1
+        six_hrs_ago = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE listings SET is_new = 1 WHERE is_active = 1 AND first_seen >= ?",
+            (six_hrs_ago,)
+        )
+        conn.execute(
+            "UPDATE listings SET is_new = 0 WHERE is_active = 1 AND first_seen < ?",
+            (six_hrs_ago,)
+        )
         conn.commit()
 
         return {
@@ -292,10 +309,11 @@ def upsert_alert(email: str, region: Optional[str] = None,
             INSERT INTO user_alerts (email, region, min_beds, max_price, min_score)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
-                region    = excluded.region,
-                min_beds  = excluded.min_beds,
-                max_price = excluded.max_price,
-                min_score = excluded.min_score
+                region      = excluded.region,
+                min_beds   = excluded.min_beds,
+                max_price  = excluded.max_price,
+                min_score  = excluded.min_score,
+                last_sent  = NULL
         """, (email, region, min_beds, max_price, min_score))
         conn.commit()
     finally:
@@ -326,3 +344,138 @@ if __name__ == "__main__":
     stats = conn.execute("SELECT COUNT(*) FROM listings WHERE is_active = 1").fetchone()
     print(f"Active listings: {stats[0]}")
     conn.close()
+
+
+# ── SendGrid Email Alerts (MC-263) ────────────────────────────────────────────
+
+def send_alert_email(
+    to_email: str,
+    listings: list[dict],
+    unsubscribe_url: str,
+) -> bool:
+    """
+    Send deal alert email via SendGrid.
+    Returns True on success, False on failure.
+    """
+    import os
+    api_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not api_key:
+        return False
+
+    if not listings:
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, Email, To, Content, PersonalizedEmail, EmailAddress
+    except ImportError:
+        return False
+
+    medal = ["🥇", "🥈", "🥉"]
+    lines = [
+        f"🏠 <strong>Toronto Rent Deal Alert</strong> — {datetime.now().strftime('%B %d, %Y')}",
+        f"<p>Found {len(listings)} matching deal{'s' if len(listings) > 1 else ''}:</p>",
+        "<ul>",
+    ]
+    for i, row in enumerate(listings[:10]):
+        emoji = medal[i] if i < 3 else "•"
+        bed_str = f"{int(row['beds'])}BR" if row.get("beds", 0) > 0 else "Studio"
+        pct = f"+{row['pct_under']:.1f}%" if row.get("pct_under", 0) > 0 else f"{row['pct_under']:.1f}%"
+        lines.append(
+            f"<li>{emoji} <a href=\"{row['url']}\">{row['neighborhood']}</a> "
+            f"{bed_str} @ <strong>${row['price']:,}/mo</strong> "
+            f"({pct} under FV ${int(row.get('fair_value', 0)):,}) — "
+            f"<a href=\"{row['url']}\">View Listing</a></li>"
+        )
+    lines.append("</ul>")
+    lines.append(
+        f"<hr><p><a href=\"{unsubscribe_url}\">Unsubscribe from deal alerts</a> "
+        f"| You subscribed with min_score={listings[0].get('min_score', '?')}</p>"
+    )
+
+    html_body = "<br>\n".join(lines)
+    unsub_html = f"<p><a href=\"{unsubscribe_url}\">Unsubscribe</a></p>"
+    full_html = html_body + unsub_html
+
+    try:
+        message = Mail(
+            from_email=Email("alerts@rentfinder.ca"),
+            to_emails=To(to_email),
+            subject=f"🏠 Toronto Rent Deals — {len(listings)} new match{'s' if len(listings) > 1 else ''} today!",
+            html_content=Content("text/html", full_html),
+        )
+        sg = SendGridAPIClient(api_key)
+        response = sg.send(message)
+        return 200 <= response.status_code < 300
+    except Exception:
+        return False
+
+
+def check_and_send_alerts() -> dict:
+    """
+    MC-263: After a scrape run, check all enabled alerts against active listings.
+    For each user, find matching listings and send one email (max 1 per hour per user).
+    Returns summary dict with sends, skips, errors.
+    """
+    from datetime import timedelta as _td
+    conn = _get_conn()
+    try:
+        one_hour_ago = (datetime.now(timezone.utc) - _td(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        alerts = conn.execute("""
+            SELECT alert_id, email, region, min_beds, max_price, min_score, last_sent
+            FROM user_alerts WHERE is_enabled = 1
+        """).fetchall()
+
+        results = {"checked": len(alerts), "sent": 0, "skipped_rate_limit": 0, "skipped_no_matches": 0, "errors": 0}
+
+        for alert in alerts:
+            alert_id, email, region, min_beds, max_price, min_score, last_sent = alert
+
+            # Rate limit: skip if last_sent within 1 hour
+            if last_sent and last_sent >= one_hour_ago:
+                results["skipped_rate_limit"] += 1
+                continue
+
+            # Build query for matching listings
+            query = "SELECT * FROM listings WHERE is_active = 1 AND score >= ?"
+            params = [min_score or 0.0]
+            if region:
+                query += " AND region = ?"
+                params.append(region)
+            if min_beds is not None:
+                query += " AND beds >= ?"
+                params.append(min_beds)
+            if max_price is not None:
+                query += " AND price <= ?"
+                params.append(max_price)
+
+            matches = conn.execute(query, params).fetchall()
+            if not matches:
+                results["skipped_no_matches"] += 1
+                continue
+
+            # Build unsubscribe URL (use app's base URL from env or localhost)
+            base_url = os.environ.get("RENT_FINDER_URL", "http://localhost:5000")
+            unsub_url = f"{base_url}/api/alerts/{email.replace('@', '%40')}"
+
+            # Send email
+            match_rows = [dict(zip([d[0] for d in conn.execute("SELECT * FROM listings LIMIT 0").description], m)) for m in matches]
+            for row in match_rows:
+                row["min_score"] = min_score
+
+            sent_ok = send_alert_email(email, match_rows, unsub_url)
+            if sent_ok:
+                conn.execute(
+                    "UPDATE user_alerts SET last_sent = ? WHERE alert_id = ?",
+                    (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), alert_id)
+                )
+                conn.commit()
+                results["sent"] += 1
+            else:
+                results["errors"] += 1
+
+        return results
+    finally:
+        conn.close()
+

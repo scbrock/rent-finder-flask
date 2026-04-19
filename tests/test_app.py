@@ -47,10 +47,10 @@ def test_csv_exists():
 
 
 def test_filter_by_min_beds():
-    resp = client.get('/api/deals?min_beds=1')
+    resp = client.get('/api/deals?beds_min=1')
     deals = resp.get_json()
     for d in deals:
-        assert d.get('Beds', 0) >= 1
+        assert d.get('beds', 0) >= 1
 
 
 def test_filter_by_max_price():
@@ -64,7 +64,7 @@ def test_filter_by_neighbourhood():
     resp = client.get('/api/deals?neighbourhood=Queen')
     deals = resp.get_json()
     for d in deals:
-        assert 'queen' in d.get('Neighbourhood', '').lower()
+        assert 'queen' in d.get('neighbourhood', '').lower()
 
 
 def test_sort_options():

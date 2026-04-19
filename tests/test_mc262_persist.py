@@ -145,6 +145,62 @@ class TestUpsert:
         conn.close()
 
 
+class TestIsNew:
+    def test_is_new_set_on_insert(self, db_path):
+        """Newly inserted listings should have is_new=1."""
+        db, _ = db_path
+        import pandas as pd
+        rows = [{
+            "listing_id": "new-001", "source": "Kijiji", "price": 2000,
+            "beds": 1, "baths": 1, "neighborhood": "Annex", "region": "Downtown",
+            "link": "https://example.com/new1", "days_ago": 1, "is_stale": False, "title": "New A",
+        }]
+        persist.upsert_listings(rows, pd.DataFrame(rows))
+        conn = sqlite3.connect(db)
+        is_new = conn.execute(
+            "SELECT is_new FROM listings WHERE listing_id = ?", ("new-001",)
+        ).fetchone()[0]
+        assert is_new == 1
+        conn.close()
+
+    def test_is_new_reset_to_zero_on_reupsert(self, db_path):
+        """Re-upserted listings get is_new=0 set by ON CONFLICT, then 6hr refresh sets it back if within window."""
+        db, _ = db_path
+        import pandas as pd
+        rows1 = [{
+            "listing_id": "reup-001", "source": "Kijiji", "price": 2000,
+            "beds": 1, "baths": 1, "neighborhood": "Annex", "region": "Downtown",
+            "link": "https://example.com/reup1", "days_ago": 1, "is_stale": False, "title": "First",
+        }]
+        persist.upsert_listings(rows1, pd.DataFrame(rows1))
+        conn = sqlite3.connect(db)
+        first_is_new = conn.execute(
+            "SELECT is_new FROM listings WHERE listing_id = ?", ("reup-001",)
+        ).fetchone()[0]
+        assert first_is_new == 1
+        conn.close()
+
+        # Override first_seen to >6hrs ago so 6hr refresh won't re-enable is_new
+        old_time = "2020-01-01T00:00:00Z"
+        rows2 = [{
+            "listing_id": "reup-001", "source": "Kijiji", "price": 1950,
+            "beds": 1, "baths": 1, "neighborhood": "Annex", "region": "Downtown",
+            "link": "https://example.com/reup1", "days_ago": 1, "is_stale": False, "title": "Second",
+        }]
+        conn = sqlite3.connect(db)
+        conn.execute("UPDATE listings SET first_seen = ? WHERE listing_id = 'reup-001'", (old_time,))
+        conn.commit()
+        conn.close()
+        persist.upsert_listings(rows2, pd.DataFrame(rows2))
+        conn = sqlite3.connect(db)
+        # After re-upsert (is_new=0 in ON CONFLICT), then 6hr refresh sees old first_seen -> stays 0
+        is_new_after = conn.execute(
+            "SELECT is_new FROM listings WHERE listing_id = ?", ("reup-001",)
+        ).fetchone()[0]
+        assert is_new_after == 0
+        conn.close()
+
+
 class TestAlerts:
     def test_upsert_alert(self, db_path):
         db, _ = db_path

@@ -721,6 +721,16 @@ def main():
             r["listing_id"] = r.get("link", "") or r.get("listing_id", "")
         stats = upsert_listings(scored_rows, scored)
         print(f"\n  SQLite: {stats['total_active']} active listings, {stats['inactive_this_run']} marked inactive")
+
+        # MC-263: check alerts after each scrape run
+        try:
+            from persist import check_and_send_alerts
+            alert_results = check_and_send_alerts()
+            print(f"\n  Alerts: {alert_results['sent']} sent, {alert_results['skipped_rate_limit']} rate-limited, "
+                  f"{alert_results['skipped_no_matches']} no matches, {alert_results['errors']} errors "
+                  f"(checked {alert_results['checked']} alerts)")
+        except Exception as e:
+            print(f"\n  Alerts check skipped: {e}")
     except Exception as e:
         print(f"\n  SQLite persistence skipped: {e}")
 

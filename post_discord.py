@@ -35,7 +35,8 @@ def post_deals_to_discord(scored_df, limit=5):
 
     medal_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     for _, row in deals.iterrows():
-        emoji = medal_emoji[row["rank"] - 1] if row["rank"] <= 5 else f"#{row['rank']}"
+        rank = int(row["rank"])
+        emoji = medal_emoji[rank - 1] if rank <= 5 else f"#{rank}"
         pct = f"+{row['pct_under']:.1f}%" if row["pct_under"] > 0 else f"{row['pct_under']:.1f}%"
         bed_str = f"{row['beds']}BR" if row["beds"] > 0 else "Studio"
         sqft_str = f" | {int(row['sqft']):,}ft²" if pd.notna(row["sqft"]) and row["sqft"] > 10 else ""

@@ -6,6 +6,7 @@ MC-252: Stale listing filter (days_ago <= 30) exposed in API.
 MC-254: Days-on-market badge + freshness sort + stale toggle.
 MC-255: Cautions column — red flag warning chips.
 MC-257: Commute time filter — user-specified destination via OpenRouteService.
+MC-261: Context-aware fair value — segment-relative pricing with fallback.
 """
 
 import os, sys, json, time, hashlib, math
@@ -79,6 +80,8 @@ def _normalize_row(r: dict) -> dict:
         baths = float(baths_raw) if str(baths_raw) not in ('', 'None', 'nan', '0', '0.0') else None
         is_stale_raw = str(r.get('is_stale', '')).strip().lower()
         is_stale = is_stale_raw in ('true', '1', 'yes', '1.0', '1')
+        is_new_raw = str(r.get('is_new', '')).strip()
+        is_new = is_new_raw in ('true', '1', 'yes', '1.0', '1', '1')
         days_ago_raw = r.get('days_ago', '')
         days_ago = int(float(days_ago_raw)) if str(days_ago_raw) not in ('', 'None', 'nan') else None
         row_dict = {
@@ -95,6 +98,7 @@ def _normalize_row(r: dict) -> dict:
             'days_ago_str': _days_ago_str(days_ago),
             'days_ago_class': _days_ago_class(days_ago),
             'is_stale': is_stale,
+            'is_new': is_new,
             'sqft': r.get('sqft', ''),
             'commute_minutes': float(r['commute_minutes']) if r.get('commute_minutes', '') not in ('', 'None', 'nan', None) else None,
             'link': r.get('url') or r.get('link', ''),
@@ -204,6 +208,11 @@ def api_deals():
     key = key_map.get(sort_by, 'final_score')
     deals.sort(key=lambda d: d.get(key, 0) if isinstance(d.get(key), (int, float)) else 0, reverse=reverse)
 
+    # MC-261: segment-aware fair value (relative to filtered search results)
+    if deals:
+        from compute_segment_fv import compute_fair_value_with_fallback
+        deals = compute_fair_value_with_fallback(deals)
+
     return jsonify(deals[:50])
 
 
@@ -225,6 +234,42 @@ def api_meta():
         'baths': baths_vals,
         'regions': regions,
     })
+
+
+@app.route('/api/deals/geo')
+def api_deals_geo():
+    """
+    MC-256: Return deals enriched with lat/lng from neighbourhood centroids.
+    Uses get_centroid() for fuzzy matching — no external API calls.
+    Returns only listings that have a mappable neighbourhood.
+    """
+    from neighbourhood_lookup import get_centroid
+
+    deals = load_deals()
+    geo_deals = []
+    for d in deals:
+        coords = get_centroid(d.get('neighbourhood', ''))
+        if coords:
+            lat, lng = coords
+            geo_deals.append({
+                'neighbourhood': d.get('neighbourhood', ''),
+                'region': d.get('region', ''),
+                'beds': d.get('beds'),
+                'baths': d.get('baths'),
+                'price': d.get('price'),
+                'price_fmt': d.get('price_fmt', ''),
+                'pct_under': d.get('pct_under', 0),
+                'pct_under_fmt': d.get('pct_under_fmt', ''),
+                'days_ago': d.get('days_ago'),
+                'days_ago_str': d.get('days_ago_str', ''),
+                'link': d.get('link', ''),
+                'final_score': d.get('final_score', 0),
+                'cautions': d.get('cautions', []),
+                'commute_minutes': d.get('commute_minutes'),
+                'lat': lat,
+                'lng': lng,
+            })
+    return jsonify(geo_deals)
 
 
 @app.route('/api/deals/export.csv')
@@ -518,6 +563,57 @@ def api_commute():
 
     return jsonify({'destination': destination, 'dest_coords': [dest_lon, dest_lat],
                     'times': results})
+
+
+@app.route('/api/alerts', methods=['POST'])
+def api_alerts_post():
+    """
+    MC-263: Subscribe to deal alerts.
+    POST body: {"email": "user@example.com", "region": "Downtown",
+                 "min_beds": 1, "max_price": 2500, "min_score": 0.15}
+    Returns: {"success": true, "message": "Alert saved"}
+    """
+    data = request.get_json(force=True) or {}
+    email = (data.get('email') or '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'valid email required'}), 400
+
+    region = (data.get('region') or '').strip() or None
+    min_beds = data.get('min_beds')
+    max_price = data.get('max_price')
+    min_score = data.get('min_score', 0.10)
+    if min_beds is not None:
+        try: min_beds = float(min_beds)
+        except: min_beds = None
+    if max_price is not None:
+        try: max_price = float(max_price)
+        except: max_price = None
+    if min_score is not None:
+        try: min_score = float(min_score)
+        except: min_score = 0.10
+
+    try:
+        from persist import upsert_alert
+        upsert_alert(email, region, min_beds, max_price, min_score)
+        return jsonify({'success': True, 'message': 'Alert saved'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/alerts/<email>', methods=['DELETE'])
+def api_alerts_delete(email):
+    """MC-263: One-click unsubscribe — disables alert."""
+    import sqlite3
+    email = email.strip()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("UPDATE user_alerts SET is_enabled = 0 WHERE email = ?", (email,))
+        conn.commit()
+        rows_changed = conn.total_changes
+        conn.close()
+        return jsonify({'success': True, 'unsubscribed': rows_changed > 0})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
