@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder ??? Progress Log
 
-**Current Phase:** MC-260 complete — 140 official Toronto neighbourhood centroids + neighbourhood lookup. MC-256 (Leaflet map) in review.
-**Last Updated:** 2026-04-18 12:15 PM ET (manual find_deals.py run + MC-276 marked complete)
+**Current Phase:** MC-261 — context-aware fair value (segment-relative pricing) in review.
+**Last Updated:** 2026-04-18 8:43 PM ET
 
 ---
 

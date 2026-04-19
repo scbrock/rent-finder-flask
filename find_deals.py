@@ -767,7 +767,7 @@ def main():
             "",
         ]
         for _, row in top3.iterrows():
-            emoji = medal[row["rank"] - 1]
+            emoji = medal[int(row["rank"]) - 1]
             pct = f"+{row['pct_under']:.1f}%" if row['pct_under'] > 0 else f"{row['pct_under']:.1f}%"
             bed_str = f"{row['beds']}BR" if row['beds'] > 0 else "Studio"
             sqft_str = f" | {int(row['sqft']):,}ft²" if pd.notna(row.get("sqft")) and row.get("sqft", 0) > 10 else ""
