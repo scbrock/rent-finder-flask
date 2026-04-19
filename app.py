@@ -1102,3 +1102,70 @@ def api_price_drops(email: str):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+
+
+# ── MC-274: Similar Listing Recommendations ─────────────────────────────────
+
+@app.route('/api/similar/shortlist')
+def api_similar_shortlist():
+    """
+    Return up to 5 listings similar to the user's shortlist.
+    Query param: ?email=user@example.com
+    """
+    email = request.args.get('email', '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'valid email required'}), 400
+
+    from similar_listings import get_similar_for_shortlist
+    try:
+        similar = get_similar_for_shortlist(email, limit=5)
+        return jsonify({
+            'email': email,
+            'count': len(similar),
+            'recommendations': [
+                {
+                    'listing_id': s.listing_id,
+                    'title': s.title,
+                    'price': s.price,
+                    'price_fmt': s.price_fmt,
+                    'beds': s.beds,
+                    'neighbourhood': s.neighbourhood,
+                    'url': s.url,
+                    'final_score': s.final_score,
+                    'similarity_explanation': s.similarity_explanation,
+                }
+                for s in similar
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/similar/<listing_id>')
+def api_similar_listing(listing_id):
+    """
+    Return up to 3 listings similar to a specific listing (for detail page).
+    """
+    from similar_listings import get_similar_for_listing
+    try:
+        similar = get_similar_for_listing(listing_id, limit=3)
+        return jsonify({
+            'listing_id': listing_id,
+            'count': len(similar),
+            'recommendations': [
+                {
+                    'listing_id': s.listing_id,
+                    'title': s.title,
+                    'price': s.price,
+                    'price_fmt': s.price_fmt,
+                    'beds': s.beds,
+                    'neighbourhood': s.neighbourhood,
+                    'url': s.url,
+                    'final_score': s.final_score,
+                    'similarity_explanation': s.similarity_explanation,
+                }
+                for s in similar
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
