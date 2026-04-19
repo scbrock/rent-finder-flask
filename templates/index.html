@@ -99,6 +99,10 @@
     .link-btn { display: inline-block; padding: 3px 9px; background: #40916c; color: white;
                 border-radius: 4px; text-decoration: none; font-size: 0.75rem; font-weight: 600; }
     .link-btn:hover { background: #2d6a4f; }
+    .star-btn { background: none; border: none; font-size: 1.1rem; cursor: pointer; padding: 2px 5px;
+                color: #bbb; transition: color 0.15s; }
+    .star-btn:hover { color: #f39c12; }
+    .star-btn.saved { color: #f39c12; }
 
     .no-deals { text-align: center; padding: 40px; color: #888; }
     .loading { text-align: center; padding: 30px; color: #888; }
@@ -115,8 +119,37 @@
 <div class="container">
   <header>
     <h1>🏠 Toronto Rent Deals</h1>
-    <p>Listings priced below market — scraped from Kijiji. Updated daily.</p>
+    <p>Find Toronto rentals priced below market. We score every listing — so you only look at the ones worth your time.</p>
   </header>
+
+  <!-- MC-265: How It Works + Stats -->
+  <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px; margin-bottom:14px;">
+    <!-- How it works -->
+    <div style="grid-column:1/-1; background:white; border-radius:8px; padding:18px 20px;">
+      <div style="font-size:0.75rem; font-weight:700; color:#888; letter-spacing:0.06em; text-transform:uppercase; margin-bottom:12px;">How it works</div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:0; text-align:center;">
+        <div>
+          <div style="font-size:1.8rem; margin-bottom:6px;">🔍</div>
+          <div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">We Scrape</div>
+          <div style="font-size:0.78rem; color:#555; line-height:1.5;">Kijiji + Craigslist, 5+ pages daily. Every active Toronto listing, deduped and cleaned.</div>
+        </div>
+        <div style="border-left:1px solid #eee;">
+          <div style="font-size:1.8rem; margin-bottom:6px;">📊</div>
+          <div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">We Score</div>
+          <div style="font-size:0.78rem; color:#555; line-height:1.5;">Each listing compared to neighbourhood medians by bedrooms. Price vs. fair value = deal score.</div>
+        </div>
+        <div style="border-left:1px solid #eee;">
+          <div style="font-size:1.8rem; margin-bottom:6px;">💰</div>
+          <div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">You Save</div>
+          <div style="font-size:0.78rem; color:#555; line-height:1.5;">Filter to deals under market. Click through to Kijiji. No signup. No spam. Just good finds.</div>
+        </div>
+      </div>
+    </div>
+    <!-- Stats -->
+    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found</div></div>
+    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under Market</div></div>
+    <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal</div></div>
+  </div>
 
   <div class="filters">
     <!-- Beds -->
@@ -217,10 +250,18 @@
   </div>
 
   <!-- Stats bar -->
-  <div class="stats" id="stats">
-    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found</div></div>
-    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under</div></div>
-    <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal</div></div>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px;">
+    <div style="grid-column:1/-1; background:white; border-radius:8px; padding:18px 20px;">
+      <div style="font-size:0.75rem; font-weight:700; color:#888; letter-spacing:0.06em; text-transform:uppercase; margin-bottom:12px;">How it works</div>
+      <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:0; text-align:center;">
+        <div><div style="font-size:1.8rem; margin-bottom:6px;">&#128269;</div><div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">We Scrape</div><div style="font-size:0.78rem; color:#555; line-height:1.5;">Kijiji + Craigslist, 5+ pages daily. Every active Toronto listing, deduped and cleaned.</div></div>
+        <div style="border-left:1px solid #eee;"><div style="font-size:1.8rem; margin-bottom:6px;">&#128202;</div><div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">We Score</div><div style="font-size:0.78rem; color:#555; line-height:1.5;">Each listing compared to neighbourhood medians by bedrooms. Price vs. fair value = deal score.</div></div>
+        <div style="border-left:1px solid #eee;"><div style="font-size:1.8rem; margin-bottom:6px;">&#128176;</div><div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">You Save</div><div style="font-size:0.78rem; color:#555; line-height:1.5;">Filter to deals under market. Click through to Kijiji. No signup. No spam. Just good finds.</div></div>
+      </div>
+    </div>
+    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found Today</div></div>
+    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under Market</div></div>
+    <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal Today</div></div>
   </div>
 
   <!-- MC-256: View Toggle + Map Container -->
@@ -294,7 +335,7 @@
   <table id="deals_table" style="display:none">
     <thead>
       <tr>
-        <th onclick="sortTable('score')">#</th>
+        <th onclick="sortTable('score')">Score</th>
         <th onclick="sortTable('neighbourhood')">Neighbourhood</th>
         <th onclick="sortTable('region')">Region</th>
         <th onclick="sortTable('beds')">BD</th>
@@ -302,10 +343,13 @@
         <th onclick="sortTable('price')">Price</th>
         <th onclick="sortTable('fair')">Fair</th>
         <th onclick="sortTable('pct')">% Under</th>
-        <th title="Comparable listings used for fair value">Comps</th>
         <th onclick="sortTable('commute')" title="Walking commute time">↳ Min</th>
         <th onclick="sortTable('days_ago')">Age</th>
+        <th title="Walking time to nearest grocery store" style="white-space:nowrap;">🛒 Grocery</th>
+        <th title="Walking time to nearest TTC station" style="white-space:nowrap;">🚇 TTC</th>
+        <th title="Walking time to nearest parking lot" style="white-space:nowrap;">🚗 Parking</th>
         <th class="cautions-cell">Cautions</th>
+        <th title="Save to shortlist" style="cursor:pointer;">★</th>
         <th>Link</th>
       </tr>
     </thead>
@@ -369,6 +413,7 @@ let allDeals = [];
 let currentSort = 'score';
 let lastCommuteDest = null;   // Track last computed destination
 let commuteTimesCache = {};   // neighbourhood → {commute_minutes, walk_dist_km, source}
+let shortlistStatus = {};    // listing_id → bool (is saved)
 
 // MC-263: Alert subscription form
 document.getElementById('alert_form').addEventListener('submit', async function(e) {
@@ -517,6 +562,11 @@ async function loadDeals() {
     const res = await fetch('/api/deals?' + params.toString());
     allDeals = await res.json();
 
+    // MC-271: Hydrate is_saved on each deal from shortlistStatus
+    if (userEmail) {
+      allDeals = allDeals.map(d => ({...d, is_saved: !!shortlistStatus[d.listing_id]}));
+    }
+
     // MC-257: If commute destination is set, fetch live commute times
     const commuteDest = document.getElementById('commute_dest').value.trim();
     if (commuteDest) {
@@ -609,7 +659,41 @@ function renderDeals(deals) {
     const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
     const baths = d.baths !== undefined && d.baths !== null ? d.baths : '—';
     const commute = d.commute_minutes !== undefined && d.commute_minutes !== null && d.commute_minutes !== '' ? d.commute_minutes + ' min' : '—';
+
+    // MC-267: Grocery store walk time
+    const groceryName = d.grocery_name;
+    const groceryWalk = d.grocery_walk_min;
+    let groceryHtml = '—';
+    if (groceryName) {
+      const walkStr = groceryWalk ? groceryWalk + ' min' : '';
+      groceryHtml = `<span title="${groceryName}">🛒 ${walkStr}</span>`;
+    } else if (groceryWalk === null) {
+      groceryHtml = '<span style="color:#888;" title="No grocery store within 20 min walk">—</span>';
+    }
+
     const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
+
+    // MC-270: TTC station walk time
+    const stationName = d.station_name;
+    const stationWalk = d.station_walk_min;
+    let ttcHtml = '—';
+    if (stationName) {
+      const walkStr = stationWalk ? stationWalk + ' min' : '';
+      ttcHtml = `<span title="${stationName}">🚇 ${walkStr}</span>`;
+    } else if (stationWalk === null) {
+      ttcHtml = '<span style="color:#888;" title="No TTC station within 20 min walk">—</span>';
+    }
+
+    // MC-269: Parking lot walk time
+    const parkingName = d.parking_name;
+    const parkingWalk = d.parking_walk_min;
+    let parkingHtml = '—';
+    if (parkingName) {
+      const walkStr = parkingWalk ? parkingWalk + ' min' : '';
+      parkingHtml = `<span title="${parkingName}">🚗 ${walkStr}</span>`;
+    } else if (parkingWalk === null) {
+      parkingHtml = '<span style="color:#888;" title="No parking within 15 min walk">—</span>';
+    }
 
     // MC-254: days_ago badge with colour coding
     const daysAgo = d.days_ago;
@@ -631,18 +715,21 @@ function renderDeals(deals) {
     }
 
     const row = `<tr>
-      <td>${i + 1}</td>
+      <td style="font-size:1.1rem;font-weight:800;color:#2d6a4f;text-align:center;" title="Deal score - higher is better">${d.final_score ? d.final_score.toFixed(3) : (d.score || 0).toFixed(3)}</td>
       <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag}</td>
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
       <td>${baths}</td>
       <td>${d.price_fmt || '—'}</td>
       <td>${d.fair_value_fmt || '—'}</td>
-      <td class="${pctCls}"><strong>${pct}</strong></td>
-      <td title="${d.comp_message || ''}">${d.comp_count !== undefined ? d.comp_count : '—'}</td>
+      <td class="${pctCls}" style="font-size:1rem;font-weight:700;"><strong>${pct}</strong></td>
       <td>${commute}</td>
       <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span></td>
+      <td>${groceryHtml}</td>
+      <td>${ttcHtml}</td>
+      <td>${parkingHtml}</td>
       <td>${cautionsHtml}</td>
+      <td><button class="star-btn" data-id="${d.listing_id}" data-saved="${d.is_saved ? '1' : '0'}" onclick="toggleShortlist(this)" title="Save to shortlist">${d.is_saved ? '★' : '☆'}</button></td>
       <td><a href="${link}" target="_blank" class="link-btn">View</a></td>
     </tr>`;
     tbody.insertRow(-1).innerHTML = row;
@@ -671,6 +758,7 @@ document.getElementById('hide_stale').addEventListener('change', function() {
 
 // Init
 parseQueryParams();
+loadShortlistStatus();
 loadDeals();
 
 // ── MC-259: Listing Detail Modal ────────────────────────────────────────────
@@ -870,6 +958,71 @@ buildParams = function() {
   // commute_dest and max_commute are already in params from the original buildParams
   return params;
 };
+
+// ── MC-271: Shortlist JS ─────────────────────────────────────────────────────
+
+async function loadShortlistStatus() {
+  const email = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email');
+  if (!email) return;
+  const ids = allDeals.map(d => d.listing_id).filter(Boolean);
+  if (ids.length === 0) return;
+  try {
+    const res = await fetch('/api/saved-listings/check?email=' + encodeURIComponent(email) + '&listing_ids=' + ids.join(','));
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.saved) {
+      Object.assign(shortlistStatus, data.saved);
+    }
+  } catch(e) {
+    console.warn('Shortlist status check failed:', e.message);
+  }
+}
+
+async function toggleShortlist(btn) {
+  const email = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email');
+  if (!email) {
+    // Prompt user to subscribe first
+    const alertEmail = prompt('Enter your email to save listings:');
+    if (!alertEmail || !alertEmail.includes('@')) return;
+    localStorage.setItem('rent_alert_email', alertEmail);
+    location.reload(); // reload to pick up email and show shortlist tab
+    return;
+  }
+
+  const listingId = btn.getAttribute('data-id');
+  const isSaved = btn.getAttribute('data-saved') === '1';
+
+  if (isSaved) {
+    // Remove from shortlist: need saved_id - fetch by listing_id
+    try {
+      const res = await fetch('/api/saved-listings?email=' + encodeURIComponent(email));
+      if (res.ok) {
+        const data = await res.json();
+        const entry = (data.saved_listings || []).find(s => s.listing_id === listingId);
+        if (entry) {
+          await fetch('/api/saved-listings/' + entry.saved_id + '?email=' + encodeURIComponent(email), {method: 'DELETE'});
+        }
+      }
+    } catch(e) {}
+    shortlistStatus[listingId] = false;
+    btn.textContent = '\u2606';  // ☆
+    btn.setAttribute('data-saved', '0');
+    btn.classList.remove('saved');
+  } else {
+    // Save to shortlist
+    try {
+      await fetch('/api/saved-listings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email: email, listing_id: listingId})
+      });
+    } catch(e) {}
+    shortlistStatus[listingId] = true;
+    btn.textContent = '\u2605';  // ★
+    btn.setAttribute('data-saved', '1');
+    btn.classList.add('saved');
+  }
+}
 </script>
 <!-- Leaflet JS (MC-256) -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

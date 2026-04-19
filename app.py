@@ -1,12 +1,7 @@
 """
 Toronto Rent Deal Finder — Flask Web App
 MC-262: Serves deals from SQLite (listings.db) with browsable, filterable UI.
-Falls back to deals_output.csv if SQLite is not yet populated.
-MC-252: Stale listing filter (days_ago <= 30) exposed in API.
-MC-254: Days-on-market badge + freshness sort + stale toggle.
-MC-255: Cautions column — red flag warning chips.
-MC-257: Commute time filter — user-specified destination via OpenRouteService.
-MC-261: Context-aware fair value — segment-relative pricing with fallback.
+MC-267/268/270: POI proximity — grocery, gym, TTC via Overpass + ORS.
 """
 
 import os, sys, json, time, hashlib, math
@@ -32,6 +27,18 @@ def _days_ago_str(days_ago: int) -> str:
     return f'{days_ago}d'
 
 
+# MC-267: POI proximity cache (neighbourhood => grocery store info)
+def _load_poi_cache() -> dict:
+    cache_path = os.path.join(DATA_DIR, 'poi_cache.json')
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 def _days_ago_class(days_ago: int) -> str:
     """CSS class for color coding: green <=3, yellow 4-14, red >14."""
     if days_ago is None:
@@ -41,6 +48,13 @@ def _days_ago_class(days_ago: int) -> str:
     if days_ago <= 14:
         return 'age-medium'
     return 'age-stale'
+
+
+# MC-267/268/270: POI walk time thresholds (imported from poi.py to avoid circular imports)
+MAX_GROCERY_WALK_MIN = 20  # overridden after poi import
+MAX_GYM_WALK_MIN = 30
+MAX_STATION_WALK_MIN = 20
+MAX_PARKING_WALK_MIN = 15  # MC-269
 
 
 def _compute_cautions(d: dict) -> list[str]:
@@ -64,6 +78,30 @@ def _compute_cautions(d: dict) -> list[str]:
     # Below-typical basement threshold for 1BR downtown
     if beds == 1 and price < 1100 and 'downtown' in region:
         cautions.append('Below typical basement threshold')
+    # MC-267: No grocery store nearby warning
+    walk_min = d.get('grocery_walk_min')
+    if walk_min is not None and walk_min > MAX_GROCERY_WALK_MIN:
+        cautions.append('No grocery store nearby')
+
+    # MC-268: No gym nearby when listing has no in-building gym
+    has_gym = d.get('has_gym', False)
+    if not has_gym:
+        gym_walk = d.get('gym_walk_min')
+        if gym_walk is not None and gym_walk > MAX_GYM_WALK_MIN:
+            cautions.append('No gym nearby (none in building)')
+
+    # MC-270: No TTC station within 20 min walk
+    station_walk = d.get('station_walk_min')
+    if station_walk is not None and station_walk > MAX_STATION_WALK_MIN:
+        cautions.append('No TTC station within 20 min walk')
+
+    # MC-269: No nearby parking when listing has no included parking
+    has_parking = d.get('has_parking', False)
+    if not has_parking:
+        parking_walk = d.get('parking_walk_min')
+        if parking_walk is not None and parking_walk > MAX_PARKING_WALK_MIN:
+            cautions.append('No nearby parking available')
+
     return cautions
 
 
@@ -104,6 +142,66 @@ def _normalize_row(r: dict) -> dict:
             'link': r.get('url') or r.get('link', ''),
             'final_score': round(final_score, 3) if final_score else 0,
         }
+        # MC-267: Enrich with grocery store proximity from poi_cache
+        poi_cache = _load_poi_cache()
+        neighbourhood_raw = r.get('neighborhood', '')
+        if neighbourhood_raw:
+            cache_key = f"{neighbourhood_raw}|supermarket"
+            poi = poi_cache.get(cache_key)
+            if poi:
+                row_dict['grocery_name'] = poi.get('store_name', '')
+                row_dict['grocery_walk_min'] = poi.get('walk_minutes')
+                row_dict['grocery_dist_m'] = poi.get('distance_m')
+            else:
+                row_dict['grocery_name'] = None
+                row_dict['grocery_walk_min'] = None
+                row_dict['grocery_dist_m'] = None
+        else:
+            row_dict['grocery_name'] = None
+            row_dict['grocery_walk_min'] = None
+            row_dict['grocery_dist_m'] = None
+
+        # MC-268: Gym POI (leisure=fitness_centre)
+        if neighbourhood_raw:
+            gym_key = f"{neighbourhood_raw}|fitness_centre"
+            gym_poi = poi_cache.get(gym_key)
+            if gym_poi:
+                row_dict['gym_name'] = gym_poi.get('store_name', '')
+                row_dict['gym_walk_min'] = gym_poi.get('walk_minutes')
+            else:
+                row_dict['gym_name'] = None
+                row_dict['gym_walk_min'] = None
+        else:
+            row_dict['gym_name'] = None
+            row_dict['gym_walk_min'] = None
+
+        # MC-270: TTC station POI (station)
+        if neighbourhood_raw:
+            station_key = f"{neighbourhood_raw}|station"
+            station_poi = poi_cache.get(station_key)
+            if station_poi:
+                row_dict['station_name'] = station_poi.get('store_name', '')
+                row_dict['station_walk_min'] = station_poi.get('walk_minutes')
+            else:
+                row_dict['station_name'] = None
+                row_dict['station_walk_min'] = None
+        else:
+            row_dict['station_name'] = None
+            row_dict['station_walk_min'] = None
+
+        # MC-269: Parking POI (amenity=parking)
+        if neighbourhood_raw:
+            parking_key = f"{neighbourhood_raw}|parking"
+            parking_poi = poi_cache.get(parking_key)
+            if parking_poi:
+                row_dict['parking_name'] = parking_poi.get('store_name', '')
+                row_dict['parking_walk_min'] = parking_poi.get('walk_minutes')
+            else:
+                row_dict['parking_name'] = None
+                row_dict['parking_walk_min'] = None
+        else:
+            row_dict['parking_name'] = None
+            row_dict['parking_walk_min'] = None
         row_dict['cautions'] = _compute_cautions(row_dict)
         return row_dict
     except (ValueError, TypeError):
@@ -612,6 +710,239 @@ def api_alerts_delete(email):
         rows_changed = conn.total_changes
         conn.close()
         return jsonify({'success': True, 'unsubscribed': rows_changed > 0})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── MC-266: Saved Searches ───────────────────────────────────────────────────
+
+@app.route('/alerts')
+def page_alerts():
+    """Saved searches / watchlist dashboard (MC-266)."""
+    return render_template('alerts.html')
+
+
+@app.route('/api/saved-searches')
+def api_saved_searches_list():
+    """
+    MC-266: List all saved searches for an email.
+    Query param: ?email=user@example.com
+    Returns match counts and top match preview.
+    """
+    email = request.args.get('email', '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+
+    try:
+        from persist import get_saved_searches
+        searches = get_saved_searches(email)
+        # Normalize top_match rows for JSON serialization
+        for s in searches:
+            if s.get('top_match'):
+                tm = s['top_match']
+                s['top_match'] = _normalize_row(tm) if tm else None
+        return jsonify({'searches': searches, 'count': len(searches)})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches', methods=['POST'])
+def api_saved_searches_create():
+    """
+    MC-266: Create or update a saved search.
+    POST body: {
+        "email": "user@example.com",
+        "name": "My 1BR King West search",
+        "beds_min": 1, "beds_max": 1,
+        "region": "Downtown",
+        "neighbourhood": "King West",
+        "max_price": 2500,
+        "min_score": 0.15
+    }
+    """
+    data = request.get_json(force=True) or {}
+    email = (data.get('email') or '').strip()
+    name = (data.get('name') or '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+
+    def _f(v):
+        if v is None: return None
+        try: return float(v)
+        except: return None
+
+    try:
+        from persist import upsert_saved_search
+        search_id = upsert_saved_search(
+            email=email, name=name,
+            beds_min=_f(data.get('beds_min')),
+            beds_max=_f(data.get('beds_max')),
+            baths_min=_f(data.get('baths_min')),
+            price_min=_f(data.get('price_min')),
+            price_max=_f(data.get('price_max')),
+            neighbourhood=data.get('neighbourhood') or None,
+            region=data.get('region') or None,
+            min_score=_f(data.get('min_score')),
+            max_commute=_f(data.get('max_commute')),
+            commute_dest=data.get('commute_dest') or None,
+        )
+        return jsonify({'success': True, 'search_id': search_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches/<int:search_id>', methods=['PUT'])
+def api_saved_searches_update(search_id: int):
+    """
+    MC-266: Update a saved search.
+    PUT body: same as POST body + ?email=... for ownership check.
+    """
+    email = request.args.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'email required'}), 400
+
+    data = request.get_json(force=True) or {}
+    # Merge email into data so upsert can use it
+    data['email'] = email
+
+    def _f(v):
+        if v is None: return None
+        try: return float(v)
+        except: return None
+
+    try:
+        from persist import upsert_saved_search
+        # upsert_saved_search uses (email, name) as the conflict key, not search_id.
+        # We update by re-upserting with the same name to update fields.
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name required for update'}), 400
+        upsert_saved_search(
+            email=email, name=name,
+            beds_min=_f(data.get('beds_min')),
+            beds_max=_f(data.get('beds_max')),
+            baths_min=_f(data.get('baths_min')),
+            price_min=_f(data.get('price_min')),
+            price_max=_f(data.get('price_max')),
+            neighbourhood=data.get('neighbourhood') or None,
+            region=data.get('region') or None,
+            min_score=_f(data.get('min_score')),
+            max_commute=_f(data.get('max_commute')),
+            commute_dest=data.get('commute_dest') or None,
+        )
+        return jsonify({'success': True, 'search_id': search_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches/<int:search_id>', methods=['DELETE'])
+def api_saved_searches_delete(search_id: int):
+    """
+    MC-266: Delete a saved search.
+    Query param: ?email=user@example.com (required for ownership check).
+    """
+    email = request.args.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'email required'}), 400
+
+    try:
+        from persist import delete_saved_search
+        deleted = delete_saved_search(search_id, email)
+        if deleted:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Not found or not yours'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Shortlist / Saved Listings (MC-271) ──────────────────────────────────────
+
+@app.route('/api/saved-listings')
+def api_saved_listings_list():
+    """
+    MC-271: List all saved (shortlisted) listings for an email.
+    Query param: ?email=user@example.com
+    Returns list of saved listings with listing data.
+    """
+    email = request.args.get('email', '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    try:
+        from persist import get_saved_listings
+        listings = get_saved_listings(email)
+        for listing in listings:
+            listing['is_saved'] = True  # client-side flag
+        return jsonify({'saved_listings': listings, 'count': len(listings)})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-listings', methods=['POST'])
+def api_saved_listings_save():
+    """
+    MC-271: Save a listing to the user's shortlist.
+    POST body: {"email": "user@example.com", "listing_id": "abc123", "note": "Love this place"}
+    """
+    data = request.get_json(force=True) or {}
+    email = (data.get('email') or '').strip()
+    listing_id = (data.get('listing_id') or '').strip()
+    note = (data.get('note') or '').strip() or None
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    if not listing_id:
+        return jsonify({'error': 'listing_id required'}), 400
+    try:
+        from persist import upsert_saved_listing
+        saved_id = upsert_saved_listing(email, listing_id, note)
+        return jsonify({'success': True, 'saved_id': saved_id})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-listings/<int:saved_id>', methods=['DELETE'])
+def api_saved_listings_delete(saved_id: int):
+    """
+    MC-271: Remove a listing from the user's shortlist.
+    Query param: ?email=user@example.com (required for ownership check).
+    """
+    email = request.args.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'email required'}), 400
+    try:
+        from persist import delete_saved_listing
+        deleted = delete_saved_listing(saved_id, email)
+        if deleted:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Not found or not yours'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-listings/check')
+def api_saved_listings_check():
+    """
+    MC-271: Check if specific listings are saved for an email.
+    Query params: ?email=x&listing_ids=id1,id2,id3
+    Returns dict {listing_id: True/False} for each requested id.
+    """
+    email = request.args.get('email', '').strip()
+    ids_param = request.args.get('listing_ids', '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    if not ids_param:
+        return jsonify({'saved': {}})
+    listing_ids = [lid.strip() for lid in ids_param.split(',') if lid.strip()]
+    try:
+        from persist import is_listing_saved
+        result = {lid: is_listing_saved(email, lid) for lid in listing_ids}
+        return jsonify({'saved': result})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

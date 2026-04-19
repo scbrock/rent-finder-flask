@@ -76,19 +76,65 @@ CREATE TABLE IF NOT EXISTS user_alerts (
     last_sent   TEXT    DEFAULT NULL
 );
 
+CREATE TABLE IF NOT EXISTS saved_searches (
+    search_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email             TEXT    NOT NULL,
+    name              TEXT    NOT NULL,
+    beds_min          REAL,
+    beds_max          REAL,
+    baths_min         REAL,
+    price_min         REAL,
+    price_max         REAL,
+    neighbourhood     TEXT,
+    region            TEXT,
+    min_score         REAL,
+    max_commute       REAL,
+    commute_dest      TEXT,
+    created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    last_checked      TEXT,
+    last_match_count  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(email, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_listings_active    ON listings(is_active);
 CREATE INDEX IF NOT EXISTS idx_listings_source    ON listings(source);
 CREATE INDEX IF NOT EXISTS idx_listings_region   ON listings(region);
 CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen);
+
+CREATE TABLE IF NOT EXISTS saved_listings (
+    saved_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    email        TEXT    NOT NULL,
+    listing_id   TEXT    NOT NULL,
+    note         TEXT,
+    saved_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(email, listing_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_listings_email ON saved_listings(email);
 """
 
 
+_cached_conn = [None]
+
 def _get_conn() -> sqlite3.Connection:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """Return a single cached connection (created on first call)."""
+    if _cached_conn[0] is None:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _cached_conn[0] = conn
+    return _cached_conn[0]
+
+
+def _reset_conn() -> None:
+    """Close and clear the cached connection. Used by tests."""
+    if _cached_conn[0] is not None:
+        try:
+            _cached_conn[0].close()
+        except Exception:
+            pass
+        _cached_conn[0] = None
 
 
 def init_db() -> None:
@@ -332,6 +378,272 @@ def get_pending_alerts(min_score: float = 0.5) -> list[dict]:
         """, (min_score,)).fetchall()
         cols = [d[0] for d in conn.execute("SELECT * FROM user_alerts LIMIT 0").description]
         return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── Saved Searches (MC-266) ───────────────────────────────────────────────────
+
+def upsert_saved_search(
+    email: str,
+    name: str,
+    beds_min: Optional[float] = None,
+    beds_max: Optional[float] = None,
+    baths_min: Optional[float] = None,
+    price_min: Optional[float] = None,
+    price_max: Optional[float] = None,
+    neighbourhood: Optional[str] = None,
+    region: Optional[str] = None,
+    min_score: Optional[float] = None,
+    max_commute: Optional[float] = None,
+    commute_dest: Optional[str] = None,
+) -> int:
+    """
+    Create or update a saved search for an email-identified user.
+    Returns the search_id.
+    """
+    conn = _get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO saved_searches (
+                email, name, beds_min, beds_max, baths_min,
+                price_min, price_max, neighbourhood, region,
+                min_score, max_commute, commute_dest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email, name) DO UPDATE SET
+                beds_min     = excluded.beds_min,
+                beds_max     = excluded.beds_max,
+                baths_min    = excluded.baths_min,
+                price_min    = excluded.price_min,
+                price_max    = excluded.price_max,
+                neighbourhood= excluded.neighbourhood,
+                region       = excluded.region,
+                min_score    = excluded.min_score,
+                max_commute  = excluded.max_commute,
+                commute_dest = excluded.commute_dest
+        """, (email, name,
+              beds_min, beds_max, baths_min,
+              price_min, price_max, neighbourhood, region,
+              min_score, max_commute, commute_dest))
+        conn.commit()
+        search_id = conn.execute(
+            "SELECT search_id FROM saved_searches WHERE email = ? AND name = ?",
+            (email, name)
+        ).fetchone()[0]
+        return search_id
+    finally:
+        conn.close()
+
+
+def get_saved_searches(email: str) -> list[dict]:
+    """Return all saved searches for an email, with match counts computed."""
+    conn = _get_conn()
+    try:
+        searches = conn.execute(
+            "SELECT * FROM saved_searches WHERE email = ? ORDER BY created_at",
+            (email,)
+        ).fetchall()
+        cols = [d[0] for d in conn.execute("SELECT * FROM saved_searches LIMIT 0").description]
+        results = []
+        for row in searches:
+            s = dict(zip(cols, row))
+            # Count matching listings for this search
+            match_count = _count_saved_search_matches(conn, s)
+            s['match_count'] = match_count
+            # Get top match
+            s['top_match'] = _get_top_saved_search_match(conn, s)
+            results.append(s)
+        return results
+    finally:
+        conn.close()
+
+
+def _count_saved_search_matches(conn: sqlite3.Connection, s: dict) -> int:
+    """Count active listings matching a saved search's filters."""
+    query = "SELECT COUNT(*) FROM listings WHERE is_active = 1"
+    params = []
+    if s.get('min_score') is not None:
+        query += " AND score >= ?"
+        params.append(s['min_score'])
+    if s.get('region'):
+        query += " AND region = ?"
+        params.append(s['region'])
+    if s.get('beds_min') is not None:
+        query += " AND beds >= ?"
+        params.append(s['beds_min'])
+    if s.get('beds_max') is not None:
+        query += " AND beds <= ?"
+        params.append(s['beds_max'])
+    if s.get('baths_min') is not None:
+        query += " AND baths >= ?"
+        params.append(s['baths_min'])
+    if s.get('price_min') is not None:
+        query += " AND price >= ?"
+        params.append(s['price_min'])
+    if s.get('price_max') is not None:
+        query += " AND price <= ?"
+        params.append(s['price_max'])
+    if s.get('neighbourhood'):
+        query += " AND neighborhood LIKE ?"
+        params.append(f"%{s['neighbourhood']}%")
+    return conn.execute(query, params).fetchone()[0]
+
+
+def _get_top_saved_search_match(conn: sqlite3.Connection, s: dict) -> Optional[dict]:
+    """Return the top-scoring listing matching a saved search's filters."""
+    query = """
+        SELECT * FROM listings WHERE is_active = 1
+    """
+    params = []
+    if s.get('min_score') is not None:
+        query += " AND score >= ?"
+        params.append(s['min_score'])
+    if s.get('region'):
+        query += " AND region = ?"
+        params.append(s['region'])
+    if s.get('beds_min') is not None:
+        query += " AND beds >= ?"
+        params.append(s['beds_min'])
+    if s.get('beds_max') is not None:
+        query += " AND beds <= ?"
+        params.append(s['beds_max'])
+    if s.get('baths_min') is not None:
+        query += " AND baths >= ?"
+        params.append(s['baths_min'])
+    if s.get('price_min') is not None:
+        query += " AND price >= ?"
+        params.append(s['price_min'])
+    if s.get('price_max') is not None:
+        query += " AND price <= ?"
+        params.append(s['price_max'])
+    if s.get('neighbourhood'):
+        query += " AND neighborhood LIKE ?"
+        params.append(f"%{s['neighbourhood']}%")
+    query += " ORDER BY score DESC LIMIT 1"
+    row = conn.execute(query, params).fetchone()
+    if row:
+        cols = [d[0] for d in conn.execute("SELECT * FROM listings LIMIT 0").description]
+        return dict(zip(cols, row))
+    return None
+
+
+def delete_saved_search(search_id: int, email: str) -> bool:
+    """Delete a saved search (must match email for ownership). Returns True if deleted."""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM saved_searches WHERE search_id = ? AND email = ?",
+            (search_id, email)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def touch_saved_search(search_id: int) -> None:
+    """Update last_checked timestamp after a match evaluation."""
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE saved_searches SET last_checked = ? WHERE search_id = ?",
+            (now, search_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_saved_search_match_count(search_id: int, count: int) -> None:
+    """Update last_match_count after evaluation."""
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE saved_searches SET last_match_count = ?, last_checked = ? WHERE search_id = ?",
+            (count, now, search_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Saved Listings / Shortlist (MC-271) ──────────────────────────────────────
+
+def upsert_saved_listing(email: str, listing_id: str, note: str = None) -> int:
+    """
+    Save (or update) a listing to the user's shortlist.
+    Returns the saved_id.
+    """
+    init_db()
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            INSERT INTO saved_listings (email, listing_id, note, saved_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(email, listing_id) DO UPDATE SET
+                note = excluded.note,
+                saved_at = excluded.saved_at
+        """, (email, listing_id, note, now))
+        conn.commit()
+        cur = conn.execute(
+            "SELECT saved_id FROM saved_listings WHERE email=? AND listing_id=?",
+            (email, listing_id)
+        )
+        row = cur.fetchone()
+        return row[0] if row else 0
+    finally:
+        conn.close()
+
+
+def get_saved_listings(email: str) -> list[dict]:
+    """
+    Get all saved listings for an email, enriched with listing data.
+    Returns list of {saved_id, listing_id, note, saved_at, ...listing fields}.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute("""
+            SELECT sl.saved_id, sl.listing_id, sl.note, sl.saved_at,
+                   l.price, l.beds, l.baths, l.sqft, l.neighborhood,
+                   l.region, l.url, l.days_ago, l.is_stale,
+                   l.fair_value, l.score, l.pct_under
+            FROM saved_listings sl
+            JOIN listings l ON l.listing_id = sl.listing_id
+            WHERE sl.email = ? AND l.is_active = 1
+            ORDER BY sl.saved_at DESC
+        """, (email,))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_saved_listing(saved_id: int, email: str) -> bool:
+    """Remove a saved listing. Must match email for ownership. Returns True if deleted."""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM saved_listings WHERE saved_id = ? AND email = ?",
+            (saved_id, email)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def is_listing_saved(email: str, listing_id: str) -> bool:
+    """Check if a listing is in the user's shortlist."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM saved_listings WHERE email=? AND listing_id=?",
+            (email, listing_id)
+        ).fetchone()
+        return row is not None
     finally:
         conn.close()
 
