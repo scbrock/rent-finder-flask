@@ -4,3 +4,4 @@ gunicorn==21.2.0
 requests==2.31.0
 sendgrid==6.12.5
 python-telegram-bot==20.7
+twilio>=8.0.0

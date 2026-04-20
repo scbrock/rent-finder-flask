@@ -766,6 +766,87 @@ def api_alerts_delete(email):
         return jsonify({'error': str(e)}), 500
 
 
+# ── MC-284: SMS Subscriptions ────────────────────────────────────────────────
+
+@app.route('/api/sms/subscribe', methods=['POST'])
+def api_sms_subscribe():
+    """
+    MC-284: Subscribe to SMS deal alerts.
+    POST body: {
+        "phone": "+14165551234",
+        "email": "user@example.com",
+        "max_price": 2500,       -- optional
+        "min_beds": 1,          -- optional
+        "neighbourhood": "King West"  -- optional substring match
+    }
+    Returns: {"success": true, "sub_id": 123}
+    """
+    from sms_alerts import normalize_phone
+    data = request.get_json(force=True) or {}
+    phone = (data.get('phone') or '').strip()
+    email = (data.get('email') or '').strip()
+    if not phone or not email or '@' not in email:
+        return jsonify({'error': 'valid phone and email required'}), 400
+
+    max_price = data.get('max_price')
+    min_beds  = data.get('min_beds')
+    neighbourhood = (data.get('neighbourhood') or '').strip() or None
+
+    try:
+        normalized = normalize_phone(phone)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        from persist import upsert_sms_subscription
+        sub_id = upsert_sms_subscription(
+            phone=normalized,
+            email=email,
+            max_price=float(max_price) if max_price else None,
+            min_beds=float(min_beds) if min_beds else None,
+            neighbourhood=neighbourhood
+        )
+        return jsonify({'success': True, 'sub_id': sub_id, 'phone': normalized})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sms/subscription/<phone>', methods=['GET'])
+def api_sms_subscription_get(phone):
+    """MC-284: Get SMS subscription for a phone number."""
+    from sms_alerts import normalize_phone
+    try:
+        normalized = normalize_phone(phone)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        from persist import get_sms_subscription
+        sub = get_sms_subscription(normalized)
+        if not sub:
+            return jsonify({'error': 'not found'}), 404
+        return jsonify(sub)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sms/subscription/<phone>', methods=['DELETE'])
+def api_sms_subscription_delete(phone):
+    """MC-284: Unsubscribe from SMS alerts."""
+    from sms_alerts import normalize_phone
+    try:
+        normalized = normalize_phone(phone)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        from persist import deactivate_sms_subscription
+        deactivate_sms_subscription(normalized)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── MC-266: Saved Searches ───────────────────────────────────────────────────
 
 @app.route('/alerts')

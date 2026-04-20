@@ -91,6 +91,25 @@
   <!-- Saved searches list -->
   <div id="searches-list"></div>
 
+  <!-- SMS subscription section (MC-284) -->
+  <div id="sms-section" style="margin-top:20px;">
+    <div class="card" style="border-left:4px solid #1a73e8;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <h3 style="font-size:1rem;color:#1a73e8;">📱 SMS Deal Alerts</h3>
+        <span id="sms-status" style="font-size:0.75rem;color:#888;">Loading...</span>
+      </div>
+      <p style="font-size:0.8rem;color:#666;margin-bottom:12px;">
+        Get text messages when deals match your criteria. Enter your phone to subscribe.
+      </p>
+      <div class="email-bar">
+        <input type="tel" id="sms-phone" placeholder="+1 416 555 1234" style="flex:1;" />
+        <input type="email" id="sms-email" placeholder="your@email.com" style="flex:1;" />
+        <button class="btn" style="background:#1a73e8;color:white;" onclick="subscribeSms()">Subscribe</button>
+      </div>
+      <div id="sms-msg" style="margin-top:8px;font-size:0.8rem;"></div>
+    </div>
+  </div>
+
   <!-- Add new search form -->
   <div class="card add-form" id="add-form">
     <h3>➕ New Saved Search</h3>
@@ -342,6 +361,63 @@ const hashEmail = location.hash.replace('#', '');
 if (hashEmail && hashEmail.includes('@')) {
   document.getElementById('email-input').value = hashEmail;
   loadSearches();
+}
+
+// ── MC-284: SMS Alerts ──────────────────────────────────────────────────────
+
+async function subscribeSms() {
+  const phone = document.getElementById('sms-phone').value.trim();
+  const email = document.getElementById('sms-email').value.trim();
+  const msg = document.getElementById('sms-msg');
+
+  if (!phone || !email || !email.includes('@')) {
+    msg.style.color = 'red';
+    msg.textContent = 'Valid phone and email required.';
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API}/api/sms/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, email })
+    });
+    const data = await res.json();
+    if (data.success) {
+      msg.style.color = '#2d6a4f';
+      msg.textContent = `✓ Subscribed SMS alerts for ${data.phone}. You'll be notified when deals match.`;
+      document.getElementById('sms-phone').value = data.phone;
+    } else {
+      msg.style.color = 'red';
+      msg.textContent = 'Error: ' + (data.error || 'unknown error');
+    }
+  } catch (e) {
+    msg.style.color = 'red';
+    msg.textContent = 'Network error — is the app running?';
+  }
+}
+
+async function loadSmsSubscription() {
+  const phone = document.getElementById('sms-phone').value.trim();
+  const status = document.getElementById('sms-status');
+  if (!phone) { status.textContent = ''; return; }
+  try {
+    const res = await fetch(`${API}/api/sms/subscription/${encodeURIComponent(phone)}`);
+    if (res.ok) {
+      const sub = await res.json();
+      status.textContent = '✓ SMS active — max $' + (sub.max_price || 'any') + '/mo';
+      document.getElementById('sms-email').value = sub.email || '';
+    } else if (res.status === 404) {
+      status.textContent = 'No SMS subscription';
+    }
+  } catch (e) {
+    status.textContent = '';
+  }
+}
+
+const smsInput = document.getElementById('sms-phone');
+if (smsInput) {
+  smsInput.addEventListener('blur', loadSmsSubscription);
 }
 </script>
 </body>

@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** MC-271 complete. Backlog expanded (MC-280–285): liv.rent scraper, fair value regression, anomaly detection, trend dashboard, paid source eval, realtor.ca Playwright.
-**Last Updated:** 2026-04-19
+**Current Phase:** ✅ MC-283 — Telegram bot for real-time deal alerts (complete). All major features shipped. Next: MC-284 (SMS alerts).
+**Last Updated:** 2026-04-20 12:44 PM ET
 
 ---
 
