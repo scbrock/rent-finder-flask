@@ -275,6 +275,12 @@
     <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal Today</div></div>
   </div>
 
+  <!-- MC-274: You Might Also Like — shown only if user has shortlisted listings -->
+  <div id="similar-shortlist-section" style="display:none; background:white; border-radius:8px; padding:14px 18px; margin-bottom:14px; border-left:4px solid #2d6a4f;">
+    <div style="font-size:0.75rem; font-weight:700; color:#888; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:10px;">🔍 You Might Also Like</div>
+    <div id="similar-shortlist-list" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px;"></div>
+  </div>
+
   <!-- MC-256: View Toggle + Map Container -->
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
     <span style="font-size:0.8rem;font-weight:600;color:#555;">View:</span>
@@ -334,6 +340,12 @@
       <div style="margin-bottom:16px;">
         <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">⚠️ Caution Flags</div>
         <div id="modal_cautions"></div>
+      </div>
+
+      <!-- MC-274: Similar Listings -->
+      <div style="margin-bottom:16px;" id="similar-section" style="display:none;">
+        <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">🔍 Similar Listings</div>
+        <div id="similar-list" style="display:grid;gap:8px;"></div>
       </div>
 
       <!-- Actions -->
@@ -780,6 +792,7 @@ document.getElementById('hide_stale').addEventListener('change', function() {
 parseQueryParams();
 loadProfilePreferences();
 loadShortlistStatus();
+loadSimilarShortlist();  // MC-274: "You might also like" for users with shortlisted listings
 loadDeals();
 
 // ── MC-273: Profile preferences ───────────────────────────────────────────────
@@ -895,6 +908,39 @@ async function openListingDetail(listingId) {
     }
 
     document.getElementById('modal_link').href = d.link || '#';
+
+    // MC-274: Load similar listings into the detail modal
+    const listingId = d.listing_id;
+    const similarSection = document.getElementById('similar-section');
+    const similarList = document.getElementById('similar-list');
+    similarSection.style.display = 'none';
+    similarList.innerHTML = '';
+    try {
+      const simResp = await fetch('/api/similar/' + encodeURIComponent(listingId));
+      if (simResp.ok) {
+        const simData = await simResp.json();
+        if (simData.count > 0) {
+          similarSection.style.display = 'block';
+          similarList.innerHTML = simData.recommendations.map(s => `
+            <div style="background:#f8f9fa;border-radius:6px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+              <div>
+                <div style="font-weight:600;font-size:0.82rem;">${escHtml(s.title || s.neighbourhood || 'Listing')}</div>
+                <div style="font-size:0.75rem;color:#666;margin-top:2px;">
+                  ${s.beds ? int(s.beds) + 'BR' : ''} ${s.neighbourhood ? escHtml(s.neighbourhood) : ''} · ${s.price_fmt}
+                </div>
+                <div style="font-size:0.7rem;color:#888;margin-top:2px;">${s.similarity_explanation || ''}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;">
+                <div style="font-weight:700;color:#2d6a4f;font-size:0.85rem;">${s.price_fmt}</div>
+                <a href="${s.url || '#'}" target="_blank" style="font-size:0.7rem;color:#2d6a4f;">View →</a>
+              </div>
+            </div>
+          `).join('');
+        }
+      }
+    } catch(simErr) {
+      // Silently skip similar listings on error — not critical
+    }
 
   } catch(e) {
     closeModal();
@@ -1086,6 +1132,48 @@ async function toggleShortlist(btn) {
     btn.textContent = '\u2605';  // ★
     btn.setAttribute('data-saved', '1');
     btn.classList.add('saved');
+  }
+}
+
+// MC-274: Helpers for similar listings rendering
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function int(v) { return v == null ? '' : (parseInt(v) || 0); }
+
+// MC-274: "You might also like" — shown if user has shortlisted listings
+async function loadSimilarShortlist() {
+  const email = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email');
+  if (!email || !email.includes('@')) return;
+  // Only show if user has saved listings (shortlistStatus has entries)
+  if (Object.keys(shortlistStatus).filter(id => shortlistStatus[id]).length === 0) return;
+  try {
+    const resp = await fetch('/api/similar/shortlist?email=' + encodeURIComponent(email));
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const section = document.getElementById('similar-shortlist-section');
+    const list = document.getElementById('similar-shortlist-list');
+    if (!data.count || !data.recommendations || data.count === 0) return;
+    section.style.display = 'block';
+    list.innerHTML = data.recommendations.map(s => `
+      <div style="background:#f8f9fa;border-radius:6px;padding:10px 12px;cursor:pointer;"
+           onclick="openListingDetail('${escHtml(s.listing_id)}')">
+        <div style="font-weight:600;font-size:0.82rem;color:#2d6a4f;">${s.price_fmt}</div>
+        <div style="font-size:0.75rem;color:#555;margin-top:2px;">
+          ${s.beds ? int(s.beds) + 'BR' : ''} ${s.neighbourhood ? escHtml(s.neighbourhood) : ''}
+        </div>
+        <div style="font-size:0.7rem;color:#888;margin-top:3px;line-height:1.4;">${s.similarity_explanation || ''}</div>
+        <div style="font-size:0.7rem;color:#2d6a4f;margin-top:4px;">Score ${((s.final_score || 0) * 100).toFixed(0)}% under market →</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    // silently skip — not critical
   }
 }
 </script>
