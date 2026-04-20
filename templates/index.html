@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Toronto Rent Deals</title>
+  <!-- Chart.js (MC-282: price history sparkline) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <!-- Leaflet CSS (MC-256) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -346,6 +348,13 @@
       <div style="margin-bottom:16px;" id="similar-section" style="display:none;">
         <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">🔍 Similar Listings</div>
         <div id="similar-list" style="display:grid;gap:8px;"></div>
+      </div>
+
+      <!-- MC-282: Price History Chart -->
+      <div id="price-history-section" style="margin-bottom:16px;display:none;">
+        <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">📈 Price History (30 days)</div>
+        <div id="price-history-trend" style="font-size:0.82rem;margin-bottom:8px;"></div>
+        <canvas id="price-history-chart" height="120"></canvas>
       </div>
 
       <!-- Actions -->
@@ -752,7 +761,7 @@ function renderDeals(deals) {
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
       <td>${baths}</td>
-      <td>${d.price_fmt || '—'}</td>
+      <td>${d.price_fmt || '—'} <span class="price-trend-badge" data-lid="${d.listing_id || ''}"></span></td>
       <td>${d.fair_value_fmt || '—'}</td>
       <td class="${pctCls}" style="font-size:1rem;font-weight:700;"><strong>${pct}</strong></td>
       <td>${commute}</td>
@@ -768,6 +777,30 @@ function renderDeals(deals) {
   });
 
   document.getElementById('deals_table').style.display = 'table';
+  // MC-282: Load price trend badges after table renders
+  loadPriceTrends();
+}
+
+// MC-282: Fetch batch price trends and stamp badges on table rows
+async function loadPriceTrends() {
+  try {
+    const resp = await fetch('/api/trends');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const trends = data.trends || {};
+    const trendIcons = { down: '↓', up: '↑', stable: '—' };
+    const trendColors = { down: '#27ae60', up: '#c0392b', stable: '#aaa' };
+    const trendTitles = { down: 'Price dropped', up: 'Price rising', stable: 'Price stable' };
+    document.querySelectorAll('.price-trend-badge[data-lid]').forEach(span => {
+      const lid = span.getAttribute('data-lid');
+      if (lid && trends[lid]) {
+        const t = trends[lid];
+        span.innerHTML = `<span style="color:${trendColors[t]};font-size:0.8rem;margin-left:4px;" title="${trendTitles[t]}">${trendIcons[t]}</span>`;
+      }
+    });
+  } catch(e) {
+    // Silently skip trends on error
+  }
 }
 
 // Parking toggle styling
@@ -940,6 +973,57 @@ async function openListingDetail(listingId) {
       }
     } catch(simErr) {
       // Silently skip similar listings on error — not critical
+    }
+
+    // MC-282: Load price history chart
+    const priceHistSection = document.getElementById('price-history-section');
+    const priceHistTrend = document.getElementById('price-history-trend');
+    priceHistSection.style.display = 'none';
+    // Destroy old chart instance if any
+    const existingChart = Chart.getChart('price-history-chart');
+    if (existingChart) existingChart.destroy();
+    try {
+      const phResp = await fetch('/api/price-history?id=' + encodeURIComponent(d.listing_id));
+      if (phResp.ok) {
+        const ph = await phResp.json();
+        if (ph.count >= 2) {
+          priceHistSection.style.display = 'block';
+          const trendIcons = {up: '↑ Price rising', down: '↓ Price dropped', stable: '— Price stable'};
+          const trendColors = {up: '#c0392b', down: '#27ae60', stable: '#777'};
+          const trend = ph.trend || 'stable';
+          priceHistTrend.innerHTML = `<span style="color:${trendColors[trend]};font-weight:600;">${trendIcons[trend]}</span>`;
+          const labels = ph.history.map(p => p.ts.slice(0, 10));
+          const prices = ph.history.map(p => p.price);
+          new Chart(document.getElementById('price-history-chart'), {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [{
+                label: 'Price ($)',
+                data: prices,
+                borderColor: trend === 'down' ? '#27ae60' : trend === 'up' ? '#c0392b' : '#2d6a4f',
+                backgroundColor: 'rgba(45,106,79,0.08)',
+                tension: 0.3,
+                pointRadius: 4,
+                fill: true
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: { ticks: { font: { size: 10 } } },
+                y: { ticks: { callback: v => '$' + v.toLocaleString(), font: { size: 10 } }, beginAtZero: false }
+              }
+            }
+          });
+        } else if (ph.count === 1) {
+          priceHistSection.style.display = 'block';
+          priceHistTrend.innerHTML = '<span style="color:#777;">— Stable (only 1 data point)</span>';
+        }
+      }
+    } catch(phErr) {
+      // Silently skip price history on error
     }
 
   } catch(e) {

@@ -142,6 +142,18 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_saved_listings_email ON saved_listings(email);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_email   ON user_profiles(email);
+
+CREATE TABLE IF NOT EXISTS telegram_subscriptions (
+    sub_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_chat_id TEXT    NOT NULL UNIQUE,
+    email            TEXT    NOT NULL,
+    max_price        REAL,
+    min_beds         REAL,
+    neighbourhood    TEXT,
+    active           INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    last_alerted     TEXT
+);
 """
 
 
@@ -775,6 +787,65 @@ def get_listing_price_at_time(listing_id: str, at_iso: str) -> Optional[float]:
         conn.close()
 
 
+def get_price_history(listing_id: str, days: int = 30) -> list:
+    """
+    Return price history for a listing over the last `days` days.
+    Returns list of {"ts": ISO-str, "price": float} sorted oldest→newest.
+    """
+    conn = _get_conn()
+    try:
+        cutoff = (datetime.now(timezone.utc) - __import__('datetime').timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = conn.execute("""
+            SELECT seen_at, price FROM price_history
+            WHERE listing_id = ? AND seen_at >= ?
+            ORDER BY seen_at ASC
+        """, (listing_id, cutoff)).fetchall()
+        return [{"ts": r[0], "price": r[1]} for r in rows]
+    finally:
+        conn.close()
+
+
+def get_all_price_trends(days: int = 30) -> dict:
+    """
+    MC-282: Return a dict of {listing_id: trend} for all listings with >=2 price points.
+    trend is "up", "down", or "stable".
+    Uses a single SQL query for efficiency.
+    """
+    import datetime as _dt
+    conn = _get_conn()
+    try:
+        cutoff = (datetime.now(timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Get first and last price per listing using window functions (SQLite 3.25+)
+        rows = conn.execute("""
+            SELECT listing_id, first_price, last_price FROM (
+                SELECT listing_id,
+                       FIRST_VALUE(price) OVER (PARTITION BY listing_id ORDER BY seen_at ASC) AS first_price,
+                       FIRST_VALUE(price) OVER (PARTITION BY listing_id ORDER BY seen_at DESC) AS last_price,
+                       COUNT(*) OVER (PARTITION BY listing_id) AS cnt
+                FROM price_history
+                WHERE seen_at >= ?
+            )
+            WHERE cnt >= 2
+            GROUP BY listing_id
+        """, (cutoff,)).fetchall()
+    finally:
+        conn.close()
+
+    trends = {}
+    for row in rows:
+        lid, first_p, last_p = row[0], row[1], row[2]
+        if first_p is None or last_p is None:
+            continue
+        delta = last_p - first_p
+        if delta < -0.5:
+            trends[lid] = 'down'
+        elif delta > 0.5:
+            trends[lid] = 'up'
+        else:
+            trends[lid] = 'stable'
+    return trends
+
+
 def record_price_drop_alert(email: str, listing_id: str, price_from: float, price_to: float) -> None:
     """
     Record that we sent a price drop alert for (email, listing_id).
@@ -967,6 +1038,87 @@ def check_and_send_alerts() -> dict:
                 results["errors"] += 1
 
         return results
+    finally:
+        conn.close()
+
+# ── Telegram Subscriptions ────────────────────────────────────────────────────
+
+def upsert_telegram_subscription(telegram_chat_id: str, email: str,
+                                  max_price=None,
+                                  min_beds=None,
+                                  neighbourhood=None):
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO telegram_subscriptions
+              (telegram_chat_id, email, max_price, min_beds, neighbourhood, active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            ON CONFLICT(telegram_chat_id) DO UPDATE SET
+              email       = excluded.email,
+              max_price   = excluded.max_price,
+              min_beds    = excluded.min_beds,
+              neighbourhood = excluded.neighbourhood,
+              active      = 1
+        """, (telegram_chat_id, email, max_price, min_beds, neighbourhood))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_telegram_subscription(telegram_chat_id: str):
+    conn = _get_conn()
+    try:
+        row = conn.execute("""
+            SELECT sub_id, telegram_chat_id, email, max_price, min_beds,
+                   neighbourhood, active, created_at, last_alerted
+            FROM telegram_subscriptions
+            WHERE telegram_chat_id = ?
+        """, (telegram_chat_id,)).fetchone()
+        if not row:
+            return None
+        cols = ['sub_id', 'telegram_chat_id', 'email', 'max_price', 'min_beds',
+                'neighbourhood', 'active', 'created_at', 'last_alerted']
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def get_active_telegram_subscriptions():
+    conn = _get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT sub_id, telegram_chat_id, email, max_price, min_beds,
+                   neighbourhood, active, created_at, last_alerted
+            FROM telegram_subscriptions
+            WHERE active = 1
+        """).fetchall()
+        cols = ['sub_id', 'telegram_chat_id', 'email', 'max_price', 'min_beds',
+                'neighbourhood', 'active', 'created_at', 'last_alerted']
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def deactivate_telegram_subscription(telegram_chat_id: str):
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE telegram_subscriptions SET active = 0 WHERE telegram_chat_id = ?",
+                     (telegram_chat_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_telegram_last_alerted(telegram_chat_id: str):
+    conn = _get_conn()
+    try:
+        conn.execute("""
+            UPDATE telegram_subscriptions
+            SET last_alerted = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+            WHERE telegram_chat_id = ?
+        """, (telegram_chat_id,))
+        conn.commit()
     finally:
         conn.close()
 

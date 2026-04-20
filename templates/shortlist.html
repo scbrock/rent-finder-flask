@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Shortlist — Toronto Rent Deals</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; }
+    .container { max-width: 960px; margin: 0 auto; padding: 16px; }
+    header { background: #2d6a4f; color: white; padding: 20px 24px; border-radius: 8px; margin-bottom: 16px; }
+    header h1 { font-size: 1.4rem; }
+    header p { margin-top: 4px; opacity: 0.85; font-size: 0.8rem; }
+    header a { color: #a8d5c2; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+
+    .card { background: white; border-radius: 8px; padding: 18px 20px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+    /* Email bar */
+    .email-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+    .email-bar input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600; }
+    .btn-primary { background: #2d6a4f; color: white; }
+    .btn-primary:hover { background: #1e4f3a; }
+
+    /* Listing cards */
+    .listing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .listing-card {
+      background: #f8fffe; border: 1px solid #d0e8db; border-radius: 8px; padding: 14px;
+      transition: box-shadow 0.15s;
+    }
+    .listing-card:hover { box-shadow: 0 2px 8px rgba(45,106,79,0.15); }
+    .listing-card .price { font-size: 1.25rem; font-weight: 800; color: #2d6a4f; margin-bottom: 2px; }
+    .listing-card .neighbourhood { font-size: 0.85rem; color: #444; font-weight: 600; margin-bottom: 6px; }
+    .listing-card .meta { font-size: 0.78rem; color: #777; margin-bottom: 8px; }
+    .listing-card .score-badge {
+      display: inline-block; background: #e8f5e9; color: #2d6a4f;
+      font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; margin-right: 4px;
+    }
+    .listing-card a { color: #2d6a4f; font-size: 0.8rem; font-weight: 600; text-decoration: none; }
+    .listing-card a:hover { text-decoration: underline; }
+    .listing-card .note { font-size: 0.75rem; color: #888; font-style: italic; margin-top: 6px; }
+
+    /* Similar listings section */
+    #similar-section { border-left: 4px solid #2d6a4f; }
+    .similar-card {
+      background: #f4faf7; border: 1px solid #c8e6c9; border-radius: 8px; padding: 12px;
+    }
+    .similar-card .price { font-size: 1.1rem; font-weight: 700; color: #2d6a4f; }
+    .similar-card .neighbourhood { font-size: 0.82rem; color: #555; margin-bottom: 4px; }
+    .similar-card .explanation { font-size: 0.73rem; color: #888; font-style: italic; margin-top: 6px; }
+    .similar-card a { font-size: 0.78rem; color: #2d6a4f; text-decoration: none; font-weight: 600; }
+    .similar-card a:hover { text-decoration: underline; }
+
+    /* How recommendations work */
+    #how-it-works {
+      background: #f0f9f4; border: 1px solid #b2dfdb; border-radius: 8px;
+      padding: 16px 20px; margin-bottom: 14px;
+    }
+    #how-it-works h2 { font-size: 0.95rem; font-weight: 700; color: #2d6a4f; margin-bottom: 10px; }
+    #how-it-works .steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+    #how-it-works .step { background: white; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #444; line-height: 1.5; }
+    #how-it-works .step strong { display: block; color: #2d6a4f; margin-bottom: 3px; font-size: 0.82rem; }
+
+    .section-label {
+      font-size: 0.72rem; font-weight: 700; color: #888; letter-spacing: 0.06em;
+      text-transform: uppercase; margin-bottom: 10px;
+    }
+    .empty-msg { color: #999; font-size: 0.85rem; font-style: italic; padding: 12px 0; }
+
+    #status-msg { font-size: 0.8rem; color: #666; margin-top: 4px; min-height: 18px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>📌 My Shortlist</h1>
+    <p>Your saved Toronto rental listings &mdash; <a href="/">← Back to deals</a></p>
+  </header>
+
+  <!-- Email input -->
+  <div class="card">
+    <div class="section-label">Load your shortlist</div>
+    <div class="email-bar">
+      <input type="email" id="email_input" placeholder="your@email.com" />
+      <button class="btn btn-primary" onclick="loadShortlist()">Load</button>
+    </div>
+    <div id="status-msg"></div>
+  </div>
+
+  <!-- How Recommendations Work -->
+  <div id="how-it-works">
+    <h2>💡 How recommendations work</h2>
+    <div class="steps">
+      <div class="step">
+        <strong>🛏️ Same bed count</strong>
+        We only suggest listings with the same number of bedrooms as your shortlisted places.
+      </div>
+      <div class="step">
+        <strong>💰 Similar price range</strong>
+        Recommendations are priced within $200/month of your shortlisted listings so you're comparing apples to apples.
+      </div>
+      <div class="step">
+        <strong>📍 Same neighbourhood</strong>
+        We look for listings in the same (or adjacent) Toronto neighbourhoods so the commute stays comparable.
+      </div>
+      <div class="step">
+        <strong>⭐ Deal score</strong>
+        We rank by deal score — how far below neighbourhood market-rate the listing is. Higher score = better deal.
+      </div>
+      <div class="step">
+        <strong>🚫 No repeats</strong>
+        Listings already on your shortlist are excluded from recommendations so you only see new options.
+      </div>
+    </div>
+  </div>
+
+  <!-- Shortlisted listings -->
+  <div class="card" id="shortlist-section" style="display:none;">
+    <div class="section-label">⭐ Your saved listings (<span id="saved-count">0</span>)</div>
+    <div class="listing-grid" id="saved-list"></div>
+  </div>
+
+  <!-- You might also like -->
+  <div class="card" id="similar-section" style="display:none;">
+    <div class="section-label">🔍 You might also like</div>
+    <p style="font-size:0.78rem;color:#666;margin-bottom:12px;">
+      Based on your shortlisted listings — same beds, nearby price range, same neighbourhood.
+    </p>
+    <div class="listing-grid" id="similar-list"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div id="empty-shortlist" style="display:none;" class="card">
+    <div class="empty-msg">No saved listings found for this email. Start saving listings from the <a href="/" style="color:#2d6a4f;">deals page</a>.</div>
+  </div>
+</div>
+
+<script>
+  const statusEl = document.getElementById('status-msg');
+
+  function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function fmt(price) {
+    return price ? '$' + Number(price).toLocaleString() + '/mo' : 'N/A';
+  }
+
+  async function loadShortlist() {
+    const email = document.getElementById('email_input').value.trim();
+    if (!email || !email.includes('@')) {
+      statusEl.textContent = 'Please enter a valid email.';
+      return;
+    }
+    statusEl.textContent = 'Loading…';
+
+    // Load saved listings
+    try {
+      const r = await fetch(`/api/saved-listings?email=${encodeURIComponent(email)}`);
+      const data = await r.json();
+      const saved = data.saved_listings || [];
+
+      document.getElementById('saved-count').textContent = saved.length;
+
+      if (saved.length === 0) {
+        document.getElementById('shortlist-section').style.display = 'none';
+        document.getElementById('similar-section').style.display = 'none';
+        document.getElementById('empty-shortlist').style.display = '';
+        statusEl.textContent = '';
+        return;
+      }
+
+      document.getElementById('empty-shortlist').style.display = 'none';
+      document.getElementById('shortlist-section').style.display = '';
+
+      const list = document.getElementById('saved-list');
+      list.innerHTML = saved.map(s => `
+        <div class="listing-card">
+          <div class="price">${esc(fmt(s.price))}</div>
+          <div class="neighbourhood">${esc(s.neighborhood || s.neighbourhood || 'Toronto')}</div>
+          <div class="meta">
+            ${s.beds != null ? esc(s.beds) + ' bed' + (s.beds !== 1 ? 's' : '') + ' &nbsp;·&nbsp; ' : ''}
+            ${s.sqft ? esc(s.sqft) + ' sqft &nbsp;·&nbsp; ' : ''}
+            ${s.pct_under ? '<span class="score-badge">' + esc(Math.round(s.pct_under)) + '% under market</span>' : ''}
+          </div>
+          ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">View listing →</a>` : ''}
+          ${s.note ? `<div class="note">📝 ${esc(s.note)}</div>` : ''}
+        </div>
+      `).join('');
+
+      statusEl.textContent = `Loaded ${saved.length} saved listing${saved.length !== 1 ? 's' : ''}.`;
+
+      // Load similar / recommendations
+      loadSimilar(email);
+
+    } catch (err) {
+      statusEl.textContent = 'Error loading shortlist: ' + err.message;
+    }
+  }
+
+  async function loadSimilar(email) {
+    try {
+      const r = await fetch(`/api/similar/shortlist?email=${encodeURIComponent(email)}`);
+      const data = await r.json();
+      const recs = data.recommendations || [];
+
+      if (recs.length === 0) {
+        document.getElementById('similar-section').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('similar-section').style.display = '';
+      const list = document.getElementById('similar-list');
+      list.innerHTML = recs.map(r => `
+        <div class="similar-card">
+          <div class="price">${esc(fmt(r.price))}</div>
+          <div class="neighbourhood">
+            ${esc(r.neighbourhood || 'Toronto')}
+            ${r.beds != null ? ' &nbsp;·&nbsp; ' + esc(r.beds) + ' bed' + (r.beds !== 1 ? 's' : '') : ''}
+          </div>
+          ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">View listing →</a>` : ''}
+          <div class="explanation">${esc(r.similarity_explanation || '')}</div>
+        </div>
+      `).join('');
+    } catch (err) {
+      // silently hide similar section on error
+      document.getElementById('similar-section').style.display = 'none';
+    }
+  }
+
+  // Auto-load if ?email= is in URL
+  window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const email = params.get('email');
+    if (email) {
+      document.getElementById('email_input').value = email;
+      loadShortlist();
+    }
+  });
+</script>
+</body>
+</html>

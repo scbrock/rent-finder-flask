@@ -1048,6 +1048,12 @@ def page_profile():
     return render_template('profile.html')
 
 
+@app.route('/shortlist')
+def page_shortlist():
+    """MC-274: Serve the shortlist page with 'You might also like' recommendations."""
+    return render_template('shortlist.html')
+
+
 @app.route('/api/price-drops/<email>', methods=['GET'])
 def api_price_drops(email: str):
     """
@@ -1098,6 +1104,48 @@ def api_price_drops(email: str):
             return jsonify({'error': f'Failed to send alerts: {e}'}), 500
 
     return jsonify({'email': email, 'drops': drops, 'count': len(drops)})
+
+
+# ── MC-282: Price History Chart ──────────────────────────────────────────────
+
+@app.route('/api/price-history')
+def api_price_history():
+    """
+    MC-282: Return price history for a listing.
+    GET /api/price-history?id=<listing_id>&days=30
+    Returns: {listing_id, count, history: [{ts, price}], trend: "up"|"down"|"stable"}
+    """
+    from persist import get_price_history
+    listing_id = request.args.get('id', '').strip()
+    if not listing_id:
+        return jsonify({'error': 'id required'}), 400
+    days = min(max(int(request.args.get('days', 30)), 1), 90)
+    history = get_price_history(listing_id, days=days)
+    trend = 'stable'
+    if len(history) >= 2:
+        delta = history[-1]['price'] - history[0]['price']
+        if delta < -0.5:
+            trend = 'down'
+        elif delta > 0.5:
+            trend = 'up'
+    return jsonify({
+        'listing_id': listing_id,
+        'count': len(history),
+        'history': history,
+        'trend': trend
+    })
+
+
+@app.route('/api/trends')
+def api_trends():
+    """
+    MC-282: Return price trend for all active listings as a dict.
+    GET /api/trends
+    Returns: {trends: {"<listing_id>": "up"|"down"|"stable"}}
+    """
+    from persist import get_all_price_trends
+    trends = get_all_price_trends(days=30)
+    return jsonify({'count': len(trends), 'trends': trends})
 
 
 if __name__ == '__main__':
@@ -1169,3 +1217,51 @@ def api_similar_listing(listing_id):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# MC-283: Telegram bot webhook — called by cron after each scrape run
+@app.route('/api/telegram/webhook', methods=['POST'])
+def api_telegram_webhook():
+    """
+    Called by the scraping cron after each run completes.
+    Triggers Telegram deal alerts for all active subscribers.
+    Expected payload (optional): {"deals": [...]}  — if absent, fetches from DB
+    """
+    try:
+        deals_data = request.get_json() or {}
+    except Exception:
+        deals_data = {}
+
+    import os
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    if not bot_token:
+        return jsonify({'ok': False, 'error': 'TELEGRAM_BOT_TOKEN not configured'}), 503
+
+    try:
+        from telegram_bot import get_matching_deals_for_telegram, build_alert_message
+        from persist import get_active_telegram_subscriptions, update_telegram_last_alerted
+        from telegram import Bot
+    except ImportError as e:
+        return jsonify({'ok': False, 'error': f'Import error: {e}'}), 500
+
+    try:
+        bot = Bot(token=bot_token)
+        subs = get_active_telegram_subscriptions()
+        sent = 0
+        errors = 0
+        for sub in subs:
+            try:
+                matches = get_matching_deals_for_telegram(sub, limit=3)
+                if not matches:
+                    continue
+                message = build_alert_message(matches)
+                bot.send_message(chat_id=sub['telegram_chat_id'], text=message,
+                                 parse_mode='Markdown')
+                update_telegram_last_alerted(sub['telegram_chat_id'])
+                sent += 1
+            except Exception as e:
+                errors += 1
+        return jsonify({'ok': True, 'subscribers_notified': sent, 'errors': errors})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
