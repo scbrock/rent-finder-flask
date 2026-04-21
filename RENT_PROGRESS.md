@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** ✅ MC-283 — Telegram bot for real-time deal alerts (complete). All major features shipped. Next: MC-284 (SMS alerts).
-**Last Updated:** 2026-04-20 12:44 PM ET
+**Current Phase:** 🔄 MC-285 — Nightly mission loop running (cron id: 153f3872-0ccc-4b59-b4de-f72fb738b39c)
+**Last Updated:** 2026-04-20 6:43 PM ET
 
 ---
 
@@ -18,6 +18,9 @@
 | 2026-04-18 (AM) | MC-276 — COMPLETE | Manual find_deals.py run (cron aborted). 274 listings. 67/274 under market (24%). Best deal: Trinity-Bellwoods 1BR $2,600 (+60.3%, score=1.150). Discord post failed: post_discord.py referenced deals[rank] where rank is a float from np.float32. MC-276 already complete — branch pushed 2026-04-17 (commit a7162b5). | 274 LIVE | 67/274 (24%) | Trinity-Bellwoods 1BR $2,600 (+60.3%, score=1.150) | Discord post bug: post_discord.py line 68 — convert rank to int before indexing. Non-critical, cron continues. |
 | 2026-04-18 | MC-260 — COMPLETE | Toronto Open Data GeoJSON (140 official neighbourhoods, jasonicarter/toronto-geojson repo). Centroids computed with shapely. neighbourhood_lookup.py: direct_map for 300+ scraped variants + fuzzy match at 0.6 threshold. 14/14 tests pass. rent_finder/data/toronto_neighbourhoods.json created (gitignored). | — | — | — | 126/138 scraped neighbourhood names matched to official names. 12 unmatched = non-Toronto noise. |
 | 2026-04-19 | MC-271 — COMPLETE (in review) | Shortlist feature: saved_listings table in persist.py schema + upsert/get/delete/is_saved CRUD functions; /api/saved-listings endpoints (GET/POST/DELETE/check) in app.py; star column in deals table + toggleShortlist/loadShortlistStatus JS in index.html. 12/12 pytest tests pass. commit 2f7e7fc. | — | — | — | Email-based identity (localStorage). Star button toggles saved status. Batch shortlist check on deal load via /api/saved-listings/check. MC-268/269 also in review — poi.py generic POI framework + batch_poi.py cover them. |
+
+| 2026-04-20 (PM) | MC-285 — Nightly Cycle | Kijiji (65) + Craigslist (267) = 257 listings, 62 deals (24%), best: Harbourfront 1BR $2,300 (+61.1% under market). Discord posted. SQLite 84 active. | 257 | 62 | Harbourfront 1BR $2,300 (+61.1%) | Zumper still blocked (0 listings). |
+| 2026-04-20 (late PM) | MC-285 — Cycle 2 | Verified https://rent-finder-flask.onrender.com is live (HTTP 200, 60KB page). /api/deals returns 50 deals with filter controls. Railway token invalid — Render.com deployment via GitHub Actions is working (4 consecutive successful deploys Apr 19). No 500 errors. MC-285 complete. | — | — | — | Render.com is the working deployment target. Railway token needs renewal if used again. |
 
 ---
 
