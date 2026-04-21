@@ -276,6 +276,12 @@ def load_deals():
     return deals
 
 
+@app.route('/healthz')
+def healthz():
+    """Lightweight health check for Render free tier cold-start ping."""
+    return 'ok', 200
+
+
 @app.route('/')
 def index():
     return render_template('index.html')

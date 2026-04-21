@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 MC-285 — Nightly mission loop running (cron id: 153f3872-0ccc-4b59-b4de-f72fb738b39c)
-**Last Updated:** 2026-04-20 6:43 PM ET
+**Current Phase:** 🔄 MC-286 backlog — confirm app wake reliability on Render (cron id: 153f3872-0ccc-4b59-b4de-f72fb738b39c)
+**Last Updated:** 2026-04-21 00:43 UTC
 
 ---
 
@@ -21,6 +21,7 @@
 
 | 2026-04-20 (PM) | MC-285 — Nightly Cycle | Kijiji (65) + Craigslist (267) = 257 listings, 62 deals (24%), best: Harbourfront 1BR $2,300 (+61.1% under market). Discord posted. SQLite 84 active. | 257 | 62 | Harbourfront 1BR $2,300 (+61.1%) | Zumper still blocked (0 listings). |
 | 2026-04-20 (late PM) | MC-285 — Cycle 2 | Verified https://rent-finder-flask.onrender.com is live (HTTP 200, 60KB page). /api/deals returns 50 deals with filter controls. Railway token invalid — Render.com deployment via GitHub Actions is working (4 consecutive successful deploys Apr 19). No 500 errors. MC-285 complete. | — | — | — | Render.com is the working deployment target. Railway token needs renewal if used again. |
+| 2026-04-21 (AM) | MC-285 — Cycle 3 | Pipeline run: 261 listings (60 Kijiji + 261 Craigslist, deduped). 65 deals (25%) found. Best: Harbourfront 1BR $2,300 (+61.1%). App wake test timed out (cold start >10s on Render free tier). All major features complete. MC-286 created: confirm app wake reliability. | 261 | 65 | Harbourfront 1BR $2,300 (+61.1%) | Discord relay failed — no bot token configured. All MC-2xx features done, mission entering maintenance. |
 
 ---
 

@@ -429,6 +429,227 @@ def score_deals(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── District-level Fair Value Scoring ────────────────────────────────────────
+# MC-285: Use broader Toronto districts for fair value computation so that
+# neighbourhood+beds groups have enough listings to form valid estimates (>=3).
+
+TORONTO_DISTRICT_MAP = {
+    # Downtown Core
+    "downtown": "Downtown",
+    "financial district": "Downtown",
+    "entertainment-financial district": "Downtown",
+    "theatre district": "Downtown",
+    "university/dundas": "Downtown",
+    "bay street": "Downtown",
+    "church-yonge corridor": "Downtown",
+    "yonge-street": "Downtown",
+    "st. james town": "Downtown",
+    "st james town": "Downtown",
+    "regent park": "Downtown",
+    "harbourfront": "Downtown",
+    "king west": "Downtown",
+    "queen west": "Downtown",
+    # Midtown / Inner
+    "liberty village": "Midtown",
+    "parkdale": "Midtown",
+    "roncesvalles": "Midtown",
+    "high park": "Midtown",
+    "high park-swansea": "Midtown",
+    "the beaches": "Midtown",
+    "beaches": "Midtown",
+    "riverdale": "Midtown",
+    "leslieville": "Midtown",
+    "corktown": "Midtown",
+    "east harbour": "Midtown",
+    "distillery district": "Midtown",
+    "st. lawrence": "Midtown",
+    "town of york": "Midtown",
+    "little italy": "Midtown",
+    "annex": "Midtown",
+    "kensington market": "Midtown",
+    "ossington": "Midtown",
+    "dufferin grove": "Midtown",
+    # North York
+    "north york": "North York",
+    "willowdale": "North York",
+    "bayview village": "North York",
+    "don mills": "North York",
+    "flemingdon park": "North York",
+    "flemington": "North York",
+    "victoria village": "North York",
+    "parkwoods": "North York",
+    "york mills": "North York",
+    "wilshire": "North York",
+    "bayview": "North York",
+    "empire": "North York",
+    # Scarborough
+    "scarborough": "Scarborough",
+    "scarborough town centre": "Scarborough",
+    "agincourt": "Scarborough",
+    "milliken": "Scarborough",
+    "steeles": "Scarborough",
+    "woodbine": "Scarborough",
+    "eglinton east": "Scarborough",
+    "markham road": "Scarborough",
+    "birchmount": "Scarborough",
+    "kennedy": "Scarborough",
+    "lawrence east": "Scarborough",
+    # Etobicoke
+    "etobicoke": "Etobicoke",
+    "etobicoke centre": "Etobicoke",
+    "the kingsway": "Etobicoke",
+    "mimico": "Etobicoke",
+    "long branch": "Etobicoke",
+    "new toronto": "Etobicoke",
+    "islington": "Etobicoke",
+    "centennial": "Etobicoke",
+    "west mall": "Etobicoke",
+    # East York
+    "east york": "East York",
+    "leaside": "East York",
+    "playter estates": "East York",
+    "danforth": "East York",
+    "toothberry": "East York",
+}
+
+DISTRICT_KEYWORDS = {
+    "Downtown": ["downtown", "financial", "entertainment", "harbourfront", "king west", "queen west", "yonge", "church", "bay", "university", "st. james", "st james", "regent", "theatre", "liberty"],
+    "Midtown": ["midtown", "liberty village", "queen west", "parkdale", "roncesvalles", "high park", "beaches", "riverdale", "leslieville", "corktown", "distillery", "little italy", "annex", "kensington", "ossington", "dufferin"],
+    "North York": ["north york", "willowdale", "bayview village", "don mills", "flemingdon", "flemington", "victoria village", "parkwoods", "york mills", "wilshire", "empire"],
+    "Scarborough": ["scarborough", "agincourt", "milliken", "steeles", "woodbine", "eglinton", "markham", "birchmount", "kennedy", "lawrence"],
+    "Etobicoke": ["etobicoke", "kingsway", "mimico", "long branch", "new toronto", "islington", "centennial", "west mall"],
+    "East York": ["east york", "leaside", "playter", "danforth", "toothberry"],
+}
+
+
+def _classify_district(raw_neighborhood: str) -> str:
+    """Classify raw neighbourhood name into broader Toronto district."""
+    if not raw_neighborhood:
+        return "Toronto"
+    neigh_lower = raw_neighborhood.lower().strip()
+    for key, district in TORONTO_DISTRICT_MAP.items():
+        if key in neigh_lower or neigh_lower in key:
+            return district
+    for district, keywords in DISTRICT_KEYWORDS.items():
+        for kw in keywords:
+            if kw in neigh_lower:
+                return district
+    return "Toronto"
+
+
+def score_deals_with_districts(df: pd.DataFrame, district_col: str = "district") -> pd.DataFrame:
+    """
+    Score deals using district-level fair values for primary grouping.
+    Falls back to (neighborhood, beds) if a district has <3 listings in a beds segment.
+
+    Higher score = more underpriced.  Fresh listings get a boost.
+    """
+    df = df.copy()
+
+    # Classify raw neighbourhoods into districts
+    if district_col not in df.columns:
+        df["district"] = df["neighborhood"].apply(_classify_district)
+        district_col = "district"
+
+    # Separate active vs stale
+    if "is_stale" in df.columns:
+        active = df[~df["is_stale"]].copy()
+        stale = df[df["is_stale"]].copy()
+    else:
+        active = df.copy()
+        stale = pd.DataFrame()
+
+    if len(active) == 0:
+        df["fair_value"] = np.nan
+        df["pct_under"] = np.nan
+        df["score"] = np.nan
+        df["freshness_boost"] = np.nan
+        df["final_score"] = np.nan
+        return df
+
+    # Exclude likely room rentals from fair value calculation
+    _room_kws = ['room in', 'private room', 'master bedroom', 'bedroom in',
+                 'looking for', 'roommate', 'room for rent', '1 room', 'one room', 'shared', 'room only']
+    if 'title' in active.columns:
+        _is_room = active['title'].str.lower().str.contains('|'.join(_room_kws), na=False, regex=True)
+        fv_base = active[~_is_room]
+    else:
+        fv_base = active
+
+    # ── District-level fair value (primary) ─────────────────────────────────
+    # Group by (district, beds) — broader groups, more listings per segment
+    district_fv = fv_base.groupby(["district", "beds"])["price"].mean()
+
+    active["fair_value"] = active.set_index(["district", "beds"]).index.map(
+        lambda idx: district_fv.get(idx, np.nan)
+    ).values
+
+    # ── Fallback: neighbourhood-level if district has <3 listings ───────────
+    neigh_fv = fv_base.groupby(["neighborhood", "beds"])["price"].mean()
+    fv_bed_median = fv_base.groupby("beds")["price"].median()
+
+    # Count how many listings per (district, beds) group
+    district_counts = fv_base.groupby(["district", "beds"]).size()
+
+    # For listings with NaN fair_value, check if neighbourhood has enough data
+    mask_no_fv = active["fair_value"].isna()
+    for idx in active[mask_no_fv].index:
+        district = active.at[idx, "district"]
+        beds = active.at[idx, "beds"]
+        neigh = active.at[idx, "neighborhood"]
+        # Try neighbourhood-level
+        neigh_key = (neigh, beds)
+        if neigh_key in neigh_fv.index:
+            active.at[idx, "fair_value"] = neigh_fv[neigh_key]
+        else:
+            # Global beds median
+            if beds in fv_bed_median.index:
+                active.at[idx, "fair_value"] = fv_bed_median[beds]
+
+    # % under market
+    active["pct_under"] = (active["fair_value"] - active["price"]) / active["fair_value"] * 100
+
+    # Score: 0-1 scale normalized to max pct_under
+    max_under = active["pct_under"].max()
+    if max_under > 0:
+        active["score"] = active["pct_under"] / max_under
+    else:
+        active["score"] = 0.0
+
+    # Freshness boost
+    active["freshness_boost"] = active["days_ago"].apply(
+        lambda d: 0.15 if d <= 5 else (0.08 if d <= 14 else 0.0)
+    )
+
+    # Final score
+    active["final_score"] = active["score"] + active["freshness_boost"]
+    active = active.sort_values("final_score", ascending=False).reset_index(drop=True)
+    active["rank"] = range(1, len(active) + 1)
+
+    # Stale listings
+    if len(stale) > 0:
+        stale["fair_value"] = np.nan
+        stale["pct_under"] = np.nan
+        stale["score"] = np.nan
+        stale["freshness_boost"] = np.nan
+        stale["final_score"] = np.nan
+        stale["rank"] = np.nan
+
+    return pd.concat([active, stale], ignore_index=True)
+
+
+# ── Concatenation + Dedup ─────────────────────────────────────────────────────
+
+def concat_and_dedup(dfs: list) -> pd.DataFrame:
+    """Concatenate DataFrames and deduplicate by URL, keeping earliest seen."""
+    if not dfs:
+        return pd.DataFrame()
+    combined = pd.concat(dfs, ignore_index=True)
+    if "link" in combined.columns:
+        combined = combined.drop_duplicates(subset=["link"], keep="first")
+    return combined.reset_index(drop=True)
+
+
 # ── Commute Time (OpenRouteService + Nominatim fallback) ───────────────────────
 
 # Known destination shortcuts (avoid API calls for common Toronto locations)
