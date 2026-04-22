@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 Pipeline Maintenance — MC-288 blocked (Viewit/Rentals.ca both fail), waiting on Rex alternative source research
-**Last Updated:** 2026-04-22 08:43 UTC
+**Current Phase:** 🔄 Pipeline Maintenance — MC-288/MC-290 resolved (Viewit/Rentals blocked, Apollo infeasible). MC-291: fix /healthz on Render
+**Last Updated:** 2026-04-22 10:43 UTC
 
 ---
 
@@ -26,7 +26,7 @@
 
 ---
 
-| 2026-04-22 (08:43 UTC) | Pipeline run (cron cycle) | Pipeline: 372 listings (210 Kijiji + 314 Craigslist, deduped). 208 deals (56%). Best: Toronto 2BR $700 (+73.3% under FV $2623). MC-288 still blocked (Viewit/Rentals.ca both fail). Rex researching alternative sources. | 372 (210 Kijiji + 314 Craigslist) | 208/372 (56%) | Toronto 2BR $700 (+73.3%) | Discord webhook not configured — posting via agent message. |
+| 2026-04-22 (08:43 UTC) | Pipeline run (cron cycle) | Pipeline: 372 listings (210 Kijiji + 314 Craigslist, deduped). 218 deals (56%). Best: Toronto 2BR $700 (+73.3% under FV $2623). MC-288 (Viewit/Rentals blocked) resolved - liv.rent is next target. MC-291 created: fix /healthz 404 on Render. Git push b3e9709 committed to clean_build. | 372 (209 Kijiji + 314 Craigslist) | 218/372 (58.6%) | Toronto 2BR $700 (+73.3%) | Discord webhook not configured. /healthz 404 on Render - clean_build needs fresh deploy. |
 
 ## Next Up
 
