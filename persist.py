@@ -27,12 +27,14 @@ DB_PATH = os.path.join(DATA_DIR, "listings.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scrape_runs (
-    run_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_ts        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    source        TEXT    NOT NULL,
-    listings_seen INTEGER NOT NULL DEFAULT 0,
-    listings_new  INTEGER NOT NULL DEFAULT 0,
-    listings_inactive INTEGER NOT NULL DEFAULT 0
+    run_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_ts          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    source          TEXT    NOT NULL,
+    listings_seen   INTEGER NOT NULL DEFAULT 0,
+    listings_new    INTEGER NOT NULL DEFAULT 0,
+    listings_inactive INTEGER NOT NULL DEFAULT 0,
+    errors          INTEGER NOT NULL DEFAULT 0,
+    duration_secs   REAL    NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS listings (
@@ -201,20 +203,35 @@ def _reset_conn() -> None:
 
 
 def init_db() -> None:
-    """Run schema creation. Idempotent."""
+    """Run schema creation. Idempotent. Also runs live migrations for existing DBs."""
     _reset_conn()  # ensure fresh conn for this init
     conn = _get_conn()
     conn.executescript(SCHEMA)
     conn.commit()
+
+    # ── Live migrations: add new columns to existing tables ( idempotent ) ───
+    for col, col_type in [
+        ("errors",          "INTEGER NOT NULL DEFAULT 0"),
+        ("duration_secs",   "REAL    NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE scrape_runs ADD COLUMN {col} {col_type}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
     # Note: do NOT close conn — it is cached in _cached_conn and reused
 
 
 # ── Upsert Listings ───────────────────────────────────────────────────────────
 
-def upsert_listings(rows: list[dict], scored_df=None) -> dict:
+def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None, source_durations: dict = None) -> dict:
     """
     Upsert a list of listing dicts from the scraper.
     Listings not seen in a run are marked is_active = 0.
+
+    source_errors: dict of {source: error_count} for per-source error tracking.
+    source_durations: dict of {source: duration_secs} for per-source timing.
 
     Returns summary dict with run stats.
     """
@@ -223,6 +240,8 @@ def upsert_listings(rows: list[dict], scored_df=None) -> dict:
     run_sources = set(r.get("source", "unknown") for r in rows)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     seen_ids = set()
+    source_errors = source_errors or {}
+    source_durations = source_durations or {}
 
     try:
         new_count = 0
@@ -325,10 +344,26 @@ def upsert_listings(rows: list[dict], scored_df=None) -> dict:
             "SELECT COUNT(*) FROM listings WHERE is_active = 1"
         ).fetchone()[0]
 
-        conn.execute("""
-            INSERT INTO scrape_runs (source, listings_seen, listings_new, listings_inactive)
-            VALUES (?, ?, ?, ?)
-        """, (",".join(sorted(run_sources)), len(rows), new_count, inactive))
+        # Insert one scrape_runs row per source with per-source metrics
+        seen_ids_list = list(seen_ids)
+        for src in sorted(run_sources):
+            src_rows = [r for r in rows if r.get("source") == src]
+            src_new = sum(
+                1 for r in src_rows
+                if r.get("listing_id") and
+                conn.execute("SELECT 1 FROM listings WHERE listing_id = ?", (r["listing_id"],)).fetchone() is None
+            )
+            conn.execute("""
+                INSERT INTO scrape_runs (source, listings_seen, listings_new, listings_inactive, errors, duration_secs)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                src,
+                len(src_rows),
+                src_new,
+                0,  # inactive is tracked globally, not per-source
+                source_errors.get(src, 0),
+                source_durations.get(src, 0),
+            ))
 
         conn.commit()
 
