@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 MC-286 backlog — confirm app wake reliability on Render (cron id: 153f3872-0ccc-4b59-b4de-f72fb738b39c)
-**Last Updated:** 2026-04-21 00:43 UTC
+**Current Phase:** 🔄 Pipeline Maintenance — MC-288 blocked (Viewit/Rentals.ca both fail), waiting on Rex alternative source research
+**Last Updated:** 2026-04-22 08:43 UTC
 
 ---
 
@@ -21,9 +21,12 @@
 
 | 2026-04-20 (PM) | MC-285 — Nightly Cycle | Kijiji (65) + Craigslist (267) = 257 listings, 62 deals (24%), best: Harbourfront 1BR $2,300 (+61.1% under market). Discord posted. SQLite 84 active. | 257 | 62 | Harbourfront 1BR $2,300 (+61.1%) | Zumper still blocked (0 listings). |
 | 2026-04-20 (late PM) | MC-285 — Cycle 2 | Verified https://rent-finder-flask.onrender.com is live (HTTP 200, 60KB page). /api/deals returns 50 deals with filter controls. Railway token invalid — Render.com deployment via GitHub Actions is working (4 consecutive successful deploys Apr 19). No 500 errors. MC-285 complete. | — | — | — | Render.com is the working deployment target. Railway token needs renewal if used again. |
+| 2026-04-22 (AM) | MC-290 — COMPLETE | Kijiji scraper upgraded from HTML card parser to Apollo GraphQL state parser (scrape_kijiji_real). Kijiji: 218 listings in 5 pages (was ~50 in 3 pages). Pipeline total: 412 listings (218 Kijiji + 315 Craigslist, deduped), 230 deals (56%), best: Toronto 2BR $700 (+73.4% under FV $2628). run_pipeline.py: 5 Kijiji pages (was 3), 3 Craigslist pages (was 2). _save_raw() updated to handle both dict and dataclass listings. 15/15 tests pass. Commit ffdd9c16. | 412 (218 Kijiji + 315 CL, deduped) | 230/412 (56%) | Toronto 2BR $700 (+73.4%) | Kijiji listings 4.4x increase (218 vs 50). MC-288 still blocked (Viewit ASP.NET WebForms + ViewState, Rentals.ca ToS). MC-289 (health monitor) complete. |
 | 2026-04-21 (AM) | MC-285 — Cycle 3 | Pipeline run: 261 listings (60 Kijiji + 261 Craigslist, deduped). 65 deals (25%) found. Best: Harbourfront 1BR $2,300 (+61.1%). App wake test timed out (cold start >10s on Render free tier). All major features complete. MC-286 created: confirm app wake reliability. | 261 | 65 | Harbourfront 1BR $2,300 (+61.1%) | Discord relay failed — no bot token configured. All MC-2xx features done, mission entering maintenance. |
 
 ---
+
+| 2026-04-22 (08:43 UTC) | Pipeline run (cron cycle) | Pipeline: 372 listings (210 Kijiji + 314 Craigslist, deduped). 208 deals (56%). Best: Toronto 2BR $700 (+73.3% under FV $2623). MC-288 still blocked (Viewit/Rentals.ca both fail). Rex researching alternative sources. | 372 (210 Kijiji + 314 Craigslist) | 208/372 (56%) | Toronto 2BR $700 (+73.3%) | Discord webhook not configured — posting via agent message. |
 
 ## Next Up
 

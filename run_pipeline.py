@@ -22,7 +22,7 @@ def run_pipeline() -> dict:
     t0 = time.time()
     kijiji_errors = 0
     try:
-        df_kijiji = find_deals.scrape_kijiji(pages=3)
+        df_kijiji = find_deals.scrape_kijiji(pages=5)
     except Exception as e:
         print(f"  Kijiji exception: {e}")
         df_kijiji = find_deals.pd.DataFrame()
@@ -33,7 +33,7 @@ def run_pipeline() -> dict:
     t0 = time.time()
     cl_errors = 0
     try:
-        df_craigslist = find_deals.scrape_craigslist(pages=2)
+        df_craigslist = find_deals.scrape_craigslist(pages=3)
     except Exception as e:
         print(f"  Craigslist exception: {e}")
         df_craigslist = find_deals.pd.DataFrame()

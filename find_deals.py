@@ -173,17 +173,34 @@ def _save_raw(listings, date_str: str):
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"raw_{date_str}.json")
-    data = [{
-        "listing_id": lst.listing_id,
-        "title": lst.title,
-        "price": lst.price,
-        "price_str": lst.price_str,
-        "location": lst.location,
-        "beds_raw": lst.beds,
-        "baths_raw": lst.baths,
-        "url": lst.url,
-        "image_url": lst.image_url,
-    } for lst in listings]
+    data = []
+    for lst in listings:
+        if isinstance(lst, dict):
+            # scrape_kijiji_real returns dicts
+            data.append({
+                "listing_id": lst.get("url", "").split("/")[-1][:30],
+                "title": lst.get("title", ""),
+                "price": lst.get("price", 0),
+                "price_str": f"${lst.get('price', 0):,.0f}" if lst.get("price") else "",
+                "location": lst.get("neighborhood", ""),
+                "beds_raw": str(lst.get("beds", "")),
+                "baths_raw": str(lst.get("baths", "")),
+                "url": lst.get("url", ""),
+                "image_url": "",
+            })
+        else:
+            # dataclass objects (craigslist)
+            data.append({
+                "listing_id": getattr(lst, "listing_id", ""),
+                "title": getattr(lst, "title", ""),
+                "price": getattr(lst, "price", 0),
+                "price_str": getattr(lst, "price_str", ""),
+                "location": getattr(lst, "location", ""),
+                "beds_raw": getattr(lst, "beds", ""),
+                "baths_raw": getattr(lst, "baths", ""),
+                "url": getattr(lst, "url", ""),
+                "image_url": getattr(lst, "image_url", ""),
+            })
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"  Raw listings saved: {path}")
@@ -192,50 +209,50 @@ def _save_raw(listings, date_str: str):
 def scrape_kijiji(pages=5) -> pd.DataFrame:
     """
     Scrape Toronto rental listings from Kijiji.
-    Uses the apartment-for-rent subcategory with HTML SSR card parsing (MC-246).
+    Uses the Apollo GraphQL state parser (scrape_kijiji_real) for 3x more listings.
+    MC-290.
     """
-    import scrape_kijiji as _kj
-    import re as _re
+    import scrape_kijiji_real as _kj
 
     all_listings = []
     date_str = datetime.now().strftime("%Y-%m-%d")
     try:
-        listings = _kj.scrape(pages=pages)
+        listings = _kj.scrape_kijiji(pages=pages)
         print(f"  Kijiji: got {len(listings)} total listings")
         # Save raw listings BEFORE any processing (AC3)
         _save_raw(listings, date_str)
         for lst in listings:
-            # Parse beds/baths from text fields like "2 bedbd" or "002 BEDbd"
-            beds_raw = lst.beds or ""
-            baths_raw = lst.baths or ""
-            # Validate extracted numbers are in sane range
-            beds_num = 0
-            if _re.search(r"\d+", beds_raw):
-                try:
-                    beds_num = _clamp_beds(float(_re.search(r"\d+", beds_raw).group()))
-                except (ValueError, AttributeError):
-                    beds_num = 0
-            baths_num = 0.0
-            if _re.search(r"\d+(?:\.\d+)?", baths_raw):
-                try:
-                    baths_num = _clamp_baths(float(_re.search(r"\d+(?:\.\d+)?", baths_raw).group()))
-                except (ValueError, AttributeError):
-                    baths_num = 0.0
+            # beds/baths already parsed as ints from Apollo state
+            beds_num = _clamp_beds(float(lst.get("beds", 0) or 0))
+            baths_num = _clamp_baths(float(lst.get("baths", 0) or 0))
+            price = int(lst.get("price", 0) or 0)
+            neighborhood = lst.get("neighborhood", "Toronto") or "Toronto"
 
-            # Neighborhood = location part before first comma, or full location
-            neighborhood = lst.location.split(",")[0].strip() if lst.location else "Toronto"
+            # Compute days_ago and is_stale from activationDate
+            listed_date_str = lst.get("listed_date", "")
+            days_ago = 5
+            is_stale = False
+            if listed_date_str:
+                try:
+                    listed_dt = datetime.fromisoformat(listed_date_str.replace("Z", "+00:00"))
+                    now_utc = datetime.now(timezone.utc)
+                    days_ago = max(0, min((now_utc - listed_dt).days, 365))
+                    is_stale = days_ago > 30
+                except Exception:
+                    pass
 
-            all_listings.append({
-                "source": "Kijiji",
-                "price": int(lst.price),
-                "beds": beds_num,
-                "baths": baths_num,
-                "sqft": None,
-                "neighborhood": neighborhood[:60],
-                "days_ago": getattr(lst, 'days_ago', 5),
-                "is_stale": getattr(lst, 'is_stale', False),
-                "link": lst.url,
-            })
+            if price >= 500 and price <= 15000:
+                all_listings.append({
+                    "source": "Kijiji",
+                    "price": price,
+                    "beds": beds_num,
+                    "baths": baths_num,
+                    "sqft": lst.get("sqft"),
+                    "neighborhood": neighborhood[:60],
+                    "days_ago": days_ago,
+                    "is_stale": is_stale,
+                    "link": lst.get("url", ""),
+                })
     except Exception as e:
         print(f"  Kijiji error: {e}")
 
