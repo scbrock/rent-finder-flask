@@ -119,6 +119,23 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 1.3rem; color: #95a99e;
     }
+    /* MC-309: Craigslist lazy-load placeholder — shimmer while fetching */
+    .deal-thumb-fallback.cl-lazy {
+      border: 1px dashed #cbd5d0;
+      box-sizing: border-box;
+    }
+    .deal-thumb-fallback.cl-lazy.cl-loading {
+      background: linear-gradient(90deg, #f1f5f3 0%, #e6ede9 50%, #f1f5f3 100%);
+      background-size: 200% 100%;
+      animation: cl-lazy-shimmer 1.2s linear infinite;
+      border-color: #95a99e;
+      border-style: solid;
+      color: #95a99e;
+    }
+    @keyframes cl-lazy-shimmer {
+      0%   { background-position: 200% 0%; }
+      100% { background-position: -200% 0%; }
+    }
 
     .no-deals { text-align: center; padding: 40px; color: #888; }
     .loading { text-align: center; padding: 30px; color: #888; }
@@ -785,6 +802,12 @@ function renderDeals(deals) {
         if (img) {
           return `<img class="deal-thumb" loading="lazy" src="${img.replace(/"/g, '&quot;')}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><div class="deal-thumb-fallback" style="display:none;">🏠</div>`;
         }
+        // MC-309: For Craigslist listings, tag the fallback with the listing URL
+        // so the lazy-fetcher (cl_photo_lazy.js) can swap in the photo on scroll.
+        const clUrl = /craigslist\.org\//.test(d.link || '') ? (d.link || '') : '';
+        if (clUrl) {
+          return `<div class="deal-thumb-fallback cl-lazy" data-cl-url="${clUrl.replace(/"/g, '&quot;')}">🏠</div>`;
+        }
         return '<div class="deal-thumb-fallback">🏠</div>';
       })()}</td>
       <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag}</td>
@@ -809,6 +832,10 @@ function renderDeals(deals) {
   document.getElementById('deals_table').style.display = 'table';
   // MC-282: Load price trend badges after table renders
   loadPriceTrends();
+  // MC-309: Lazy-load Craigslist photos in the thumbnail column via IntersectionObserver.
+  if (window.__clPhotoLazy && typeof window.__clPhotoLazy.setupCLPhotoLazyLoad === 'function') {
+    window.__clPhotoLazy.setupCLPhotoLazyLoad();
+  }
 }
 
 // MC-282: Fetch batch price trends and stamp badges on table rows
@@ -1339,5 +1366,7 @@ async function loadSimilarShortlist() {
 <!-- Leaflet JS (MC-256) -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<!-- MC-309: Lazy-load Craigslist photos in deals table thumbnail column -->
+<script src="{{ url_for('static', filename='cl_photo_lazy.js') }}"></script>
 </body>
 </html>

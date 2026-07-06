@@ -1,7 +1,7 @@
-# Toronto Rent Deal Finder — Progress Log
+﻿# Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 Pipeline Maintenance — all MC-2xx complete. Pipeline healthy at ~400 listings/run.
-**Last Updated:** 2026-04-22 22:43 UTC
+**Current Phase:** 🔄 Pipeline Maintenance - all MC-2xx + MC-3xx complete. MC-309 (CL thumb lazy-load) just landed. Pipeline healthy at ~400 listings/run.
+**Last Updated:** 2026-07-06 16:43 UTC
 
 ---
 
@@ -28,6 +28,7 @@
 
 | 2026-04-22 (22:43 UTC) | Pipeline Run — idle | 407 listings (215 Kijiji + 311 Craigslist). 250 deals (61% deal rate). Best: Toronto 2BR $700 (+73.2%, FV $2607). No backlog tickets remaining. | 407 | 250 | Toronto 2BR $700 (+73.2%) | No backlog tickets. All MC-2xx complete. Going idle. |
 | 2026-04-22 (08:43 UTC) | Pipeline run (cron cycle) | Pipeline: 372 listings (210 Kijiji + 314 Craigslist, deduped). 218 deals (56%). Best: Toronto 2BR $700 (+73.3% under FV $2623). MC-288 (Viewit/Rentals blocked) resolved - liv.rent is next target. MC-291 created: fix /healthz 404 on Render. Git push b3e9709 committed to clean_build. | 372 (209 Kijiji + 314 Craigslist) | 218/372 (58.6%) | Toronto 2BR $700 (+73.3%) | Discord webhook not configured. /healthz 404 on Render - clean_build needs fresh deploy. |
+| 2026-07-06 (04:43 ET) | Pipeline run (cron cycle) | Pipeline: 376 listings (217 Kijiji + 280 Craigslist, deduped). 222 deals (59%). Best: 50 Panmure Cres 1BR $500 (+75.7% under FV $2061, score 1.000). No backlog rent-finder tickets. MC-308 created: Craigslist photos on-demand fetch (extends MC-307, Kijiji has 100% photo coverage but Craigslist has 0%). | 376 (217 Kijiji + 280 Craigslist) | 222/376 (59%) | 50 Panmure Cres 1BR $500 (+75.7%) | MC-307 in review (Tod verifying). MC-308: on-demand photo fetch for Craigslist to avoid 280 extra HTTP calls per scrape. |
 
 ## Next Up
 
@@ -250,3 +251,42 @@ Given two shortlisted listings A and B, show a side-by-side: "Listing A saves $X
 - Best: Toronto 2BR \ (FV=\, +72.9%, score=1.000)
 - Discord: No DISCORD_RENT_WEBHOOK env var set — skipping post (pipeline logs to console only)
 - Pipeline: healthy, no errors
+
+## MC-309 - CL Photos in Deals Table Thumbnail Column (COMPLETE)
+
+**What was built:**
+- `static/cl_photo_lazy.js`: self-contained IIFE module. `setupCLPhotoLazyLoad()` finds `.deal-thumb-fallback.cl-lazy[data-cl-url]` in the table, observes them with `IntersectionObserver`, and on intersect calls `/api/craigslist/photo?url=...`. Client-side throttle (250ms, well below server's 1/sec) and per-render cap (10 fetches, well below server's 30/2hr budget). One-shot: each placeholder is unobserved after first intersect. Failures (400/404/429/502/network) keep the original house-emoji placeholder - no flicker.
+- `templates/index.html` CSS: `.deal-thumb-fallback.cl-lazy` (dashed border placeholder) + `.cl-loading` shimmer animation that runs only while a fetch is in flight.
+- `templates/index.html` thumb-cell render: when the listing's `link` matches `/craigslist.org/` and there's no `image_url`, emit `<div class="deal-thumb-fallback cl-lazy" data-cl-url="<escaped url>">HOME</div>` (with the actual page using the house emoji instead of HOME).
+- `templates/index.html` `renderDeals()` end: `setupCLPhotoLazyLoad()` invoked after `loadPriceTrends()` - safe to re-call (previous observer disconnected, counters reset).
+- Tests: `tests/test_mc309_cl_thumb_lazy.js` (23 Node tests with hand-rolled DOM + IntersectionObserver mock) + `tests/test_mc309_cl_thumb_lazy.py` (5-test pytest wrapper that shells to Node). No new pip deps.
+
+**Architecture notes:**
+- Module exports via `window.__clPhotoLazy` AND `module.exports` for dual-context use (browser + Node tests).
+- Throttle design: `state.lastFetchAt + cfg.throttleMs - now` then wait then start fetch. Reset at every `setupCLPhotoLazyLoad()` call so per-render state is clean.
+- Cap enforcement: increment `state.fetchesThisRun` BEFORE the async fetch starts so a long-pending fetch can't accidentally bypass the cap.
+- One-shot via `observer.unobserve(placeholder)` immediately on intersect, before any await - prevents double-fire if user scrolls fast.
+- Failure UX: the original `.cl-lazy` placeholder is never removed; only `display:none` is set when a successful `<img>` is inserted. On broken image (`img.onerror`), we remove the `<img>` and re-show the placeholder - no flicker.
+
+**Test coverage (23 JS + 5 Python = 28 tests, all passing):**
+- PASS isCraigslistUrl: accepts CL subdomains, rejects kijiji/empty/null/non-string
+- PASS Success path: 200 + image_url => `<img>` inserted before placeholder, placeholder `display:none`, `cl-loading` cleared in `finally`
+- PASS Failure paths: 502 (no image), 429 (rate-limited), malformed JSON, network error => placeholder kept, no `<img>` inserted
+- PASS Non-CL url: no fetch issued
+- PASS Throttle: 3 concurrent calls with throttleMs=250 wait 250ms+ between each
+- PASS Throttle=0: parallel fetches allowed
+- PASS IntersectionObserver wiring: placeholders observed, cap enforced (max 10 fires per run)
+- PASS One-shot: second intersection of same placeholder does not refire
+- PASS Re-setup: previous observer disconnected
+- PASS Non-intersecting entries: nothing happens
+- PASS Image onerror: `<img>` removed, placeholder restored
+- PASS Integration: `index.html` includes script tag, emits `data-cl-url`, invokes setup in `renderDeals()`
+
+**Live verification:**
+- Flask test_client `GET /` => 200, rendered HTML contains `src="/static/cl_photo_lazy.js"`
+- `GET /static/cl_photo_lazy.js` => 200, file contents include `setupCLPhotoLazyLoad`
+- MC-309 (5 Python + 23 JS) + MC-307 (17) + MC-308 (27) + test_app (10) = 79/79 passing
+- Full suite: 501 passed; 6 pre-existing failures unrelated to MC-309 (per MC-308 self-audit): `test_mc249_region_filter_cli`, two `test_mc250_commute_filter` timeouts on find_deals.py, two `test_mc255_cautions` parking-caution diffs, `test_mc263_alerts` rate-limit timestamp.
+
+_(Updated: 2026-07-06 16:43 UTC)_
+
