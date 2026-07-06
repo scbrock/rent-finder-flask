@@ -107,3 +107,4 @@ def fetch_listing_photo(
 
 
 __all__ = ["fetch_listing_photo", "_extract_og_image"]
+# MC-308 endpoint lives here
