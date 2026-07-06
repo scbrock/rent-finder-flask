@@ -1,7 +1,7 @@
 ﻿# Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 Pipeline Maintenance - all MC-2xx + MC-3xx complete. MC-309 (CL thumb lazy-load) just landed. Pipeline healthy at ~400 listings/run.
-**Last Updated:** 2026-07-06 16:43 UTC
+**Current Phase:** 🔄 Pipeline Maintenance - all MC-2xx + MC-3xx complete. MC-312 (gallery carousel) just shipped. Pipeline healthy at ~400 listings/run.
+**Last Updated:** 2026-07-06 18:43 UTC
 
 ---
 
@@ -251,6 +251,44 @@ Given two shortlisted listings A and B, show a side-by-side: "Listing A saves $X
 - Best: Toronto 2BR \ (FV=\, +72.9%, score=1.000)
 - Discord: No DISCORD_RENT_WEBHOOK env var set — skipping post (pipeline logs to console only)
 - Pipeline: healthy, no errors
+
+---
+
+## MC-312 — Kijiji Photo Gallery Carousel (COMPLETE, in review)
+
+**What was built:**
+- `scrape_kijiji_real.py`: `extract_listings()` now stores the full `imageUrls[]` array as `image_urls` list (not just first). `image_url` (singular) still set to first URL for thumbnail back-compat.
+- `scrape_kijiji.py`: `_extract_image_urls()` now returns `{"first": str, "all": [str, ...]}` per listing (was string). `parse_html_cards()` accepts both new dict shape and legacy string shape (back-compat). `Listing` dataclass: added `image_urls: list = None` field with `__post_init__` back-compat.
+- `persist.py`: new `_encode_image_urls()` / `_decode_image_urls()` helpers; new schema column `image_urls_json TEXT` (idempotent live migration); `upsert_listings()` persists the field; `get_active_listings()` exposes it via `SELECT *`.
+- `find_deals.py`: `scrape_kijiji()` and `scrape_craigslist()` data paths propagate `image_urls` through to deal rows + raw JSON.
+- `app.py`: `_normalize_row()` exposes `image_urls` list (3 input shapes: pre-decoded list, JSON string, or DB column `image_urls_json`; falls back to single-image wrap when missing); `_build_listing_detail_response()` includes `image_urls` in `/api/listing/<idx>` JSON.
+- `static/listing_gallery.js`: self-contained IIFE module (6190 bytes). `renderGallery(images, targetEl, opts)` builds a carousel: main `<img>` + prev/next buttons (shown for 2+ images) + counter badge + thumbnail strip + active-thumb border. State API: `next()`, `prev()`, `goTo(i)`, `getState()`. Module exports on `window.__listingGallery` AND `module.exports` (dual-context for browser + Node tests).
+- `templates/index.html` CSS: `.listing-gallery` layout with absolute-positioned prev/next arrows (32px circular, $theme green #2d6a4f), counter badge (top-right, semi-transparent black), horizontal thumbnail strip (56×42px thumbs, $theme border highlight on active).
+- `templates/index.html` JS: `openListingDetail()` rewritten — calls `gallery.renderGallery(initialImages, photoWrap)` for all paths (Kijiji multi-image, single-image, CL lazy-fetch fallback). Graceful degradation if `__listingGallery` is undefined (falls back to manual `<img>` render).
+
+**Live verification (Flask test_client on clean_build):**
+- `/api/deals` → 200, 50 deals returned
+- `/api/listing/detail?id=<k>` → 200, includes `image_urls` list
+- `/static/listing_gallery.js` → 200, 6209 bytes
+- `/` → 200, index.html contains `listing_gallery.js` script tag and `window.__listingGallery` reference
+
+**Test coverage (59 new tests, all passing):**
+- `tests/test_mc312_gallery.js` — 19 Node tests (carousel builds for 0/1/2/3+ images, state transitions, clamping, thumb/prev/next clicks, onChange callbacks, re-render cleanup, getState immutability, index.html wiring).
+- `tests/test_mc312_gallery.py` — 5 pytest wrapper tests (shells to Node, asserts 0 failures, verifies state transitions covered, static asset health).
+- `tests/test_mc312_gallery_backend.py` — 35 pytest tests across 7 classes (encoding, decoding, schema migration, persistence, scraper pass-through, dataclass back-compat, _normalize_row, API integration).
+
+**Regression check:**
+- All 92 prior photo tests still pass (test_mc307_photos.py: 17 updated to reflect new dict return shape; test_mc307 legacy-compat test added; test_mc308/309 unchanged).
+- Full suite 539/547 (8 pre-existing failures unrelated: test_mc249 region filter CLI, test_mc250 commute filter timeouts, test_mc255 caution diffs, test_mc263 rate-limit timestamp).
+
+**Self-audit findings:**
+- Low: For listings without photos, modal hides the photo block entirely (no flash of empty state).
+- Low: Single-image listings render without controls (cleaner UI). Counter "1/1" not shown intentionally.
+- Low: Old DB rows get `image_url` wrapped in single-item `image_urls` list. After next pipeline run, those listings will have full `image_urls_json` populated.
+
+_(Updated: 2026-07-06 18:43 UTC)_
+
+---
 
 ## MC-309 - CL Photos in Deals Table Thumbnail Column (COMPLETE)
 

@@ -59,9 +59,14 @@ class Listing:
     baths: str
     url: str
     image_url: str
+    image_urls: list = None  # MC-312: full list of photo URLs for the gallery carousel
     source: str = "kijiji"
     days_ago: int = 5   # Days since listing was posted (computed from listing_id Unix timestamp)
     is_stale: bool = False  # True if days_ago > 30
+
+    def __post_init__(self):
+        if self.image_urls is None:
+            self.image_urls = [] if not self.image_url else [self.image_url]  # MC-312: back-compat
 
 
 def _is_rental_url(url: str) -> bool:
@@ -109,9 +114,12 @@ def _extract_activation_dates(html: str) -> dict:
 
 
 def _extract_image_urls(html: str) -> dict:
-    """Extract listing_id -> first imageUrl from __NEXT_DATA__ JSON in HTML.
-    MC-307: Returned alongside activation dates; used to populate image_url
-    on each parsed listing card.
+    """Extract listing_id -> [first_url, all_urls] from __NEXT_DATA__ JSON in HTML.
+
+    Returns:
+        dict mapping listing_id -> {"first": str, "all": [str, ...]}.
+        - first: first valid http URL (used as image_url for thumbnails / MC-307).
+        - all: full list of valid http URLs (used as image_urls for the gallery / MC-312).
     """
     import re as _re, json as _json
     match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.DOTALL)
@@ -126,11 +134,10 @@ def _extract_image_urls(html: str) -> dict:
                 listing_id = val.get("id", "")
                 if isinstance(listing_id, str):
                     listing_id = listing_id.strip("'")
-                image_urls = val.get("imageUrls", []) or []
-                for u in image_urls:
-                    if isinstance(u, str) and u.startswith("http"):
-                        result[listing_id] = u
-                        break
+                raw_urls = val.get("imageUrls", []) or []
+                valid = [u for u in raw_urls if isinstance(u, str) and u.startswith("http")]
+                if valid:
+                    result[listing_id] = {"first": valid[0], "all": valid}
         return result
     except Exception:
         return {}
@@ -206,10 +213,17 @@ def parse_html_cards(html: str, activation_dates: dict, image_urls: dict | None 
         # Image
         img_el = card.find("img", {"data-testid": "listing-card-image"})
         image_url = img_el.get("src", "") if img_el else ""
-        # MC-307: prefer JSON imageUrls[] (real photo) over the lazy-loaded card src
-        json_image = image_urls.get(str(lst_id), "")
-        if json_image:
-            image_url = json_image
+        image_urls_list: list = []
+        # MC-307: prefer JSON imageUrls[] (real photo) over the lazy-loaded card src.
+        # MC-312: also keep full list of URLs for the gallery carousel.
+        json_image_data = image_urls.get(str(lst_id)) if isinstance(image_urls, dict) else None
+        if isinstance(json_image_data, dict):
+            image_url = json_image_data.get("first") or image_url
+            image_urls_list = json_image_data.get("all", []) or []
+        elif isinstance(json_image_data, str) and json_image_data.startswith("http"):
+            # Legacy: _extract_image_urls returned just the first URL string
+            image_url = json_image_data
+            image_urls_list = [json_image_data]
 
         # Days_ago and is_stale from __NEXT_DATA__ activation dates
         activation = activation_dates.get(str(lst_id), "")
@@ -228,6 +242,7 @@ def parse_html_cards(html: str, activation_dates: dict, image_urls: dict | None 
             baths=baths,
             url=url,
             image_url=image_url,
+            image_urls=image_urls_list,  # MC-312: gallery list
             days_ago=days_ago,
             is_stale=is_stale,
         ))

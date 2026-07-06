@@ -149,6 +149,37 @@ def _normalize_row(r: dict) -> dict:
         is_new = is_new_raw in ('true', '1', 'yes', '1.0', '1', '1')
         days_ago_raw = r.get('days_ago', '')
         days_ago = int(float(days_ago_raw)) if str(days_ago_raw) not in ('', 'None', 'nan') else None
+
+        # MC-312: Resolve image_urls list. Supports three input shapes:
+        #   1. raw JSON string in image_urls_json (DB row)
+        #   2. pre-decoded list in image_urls (in-memory dict)
+        #   3. None / missing (fallback to single image_url)
+        raw_urls = r.get('image_urls')
+        if isinstance(raw_urls, str):
+            # Raw string — try JSON decode
+            import json as _json
+            try:
+                decoded = _json.loads(raw_urls)
+                image_urls_list = decoded if isinstance(decoded, list) else []
+            except Exception:
+                image_urls_list = []
+        elif isinstance(raw_urls, list):
+            image_urls_list = [u for u in raw_urls if isinstance(u, str) and u.startswith('http')]
+        else:
+            # Fallback: try image_urls_json column (DB row)
+            raw_json = r.get('image_urls_json', '')
+            if raw_json:
+                import json as _json
+                try:
+                    decoded = _json.loads(raw_json)
+                    image_urls_list = decoded if isinstance(decoded, list) else []
+                except Exception:
+                    image_urls_list = []
+            else:
+                # Fallback: wrap image_url into a 1-element list for the gallery carousel
+                single = r.get('image_url', '') or ''
+                image_urls_list = [single] if single else []
+
         row_dict = {
             'listing_id': r.get('listing_id') or r.get('url') or r.get('link', ''),
             'title': r.get('title', ''),
@@ -171,6 +202,7 @@ def _normalize_row(r: dict) -> dict:
             'link': r.get('url') or r.get('link', ''),
             'final_score': round(final_score, 3) if final_score else 0,
             'image_url': r.get('image_url', '') or '',  # MC-307: listing photo URL
+            'image_urls': image_urls_list,            # MC-312: full photo list for gallery
         }
         # MC-267: Enrich with grocery store proximity from poi_cache
         poi_cache = _load_poi_cache()
@@ -521,6 +553,7 @@ def _build_listing_detail_response(d: dict, idx: int):
         'commute_minutes': d.get('commute_minutes'),
         'link': d.get('link'),
         'image_url': d.get('image_url', ''),  # MC-307: listing photo
+        'image_urls': d.get('image_urls', []) or [],  # MC-312: gallery carousel list
         'cautions': expanded_cautions,
         'breakdown': breakdown,
     })

@@ -25,6 +25,49 @@ DB_PATH = os.path.join(DATA_DIR, "listings.db")
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
+
+# ── MC-312: Image URLs helpers ─────────────────────────────────────────────────
+def _encode_image_urls(image_urls) -> Optional[str]:
+    """Encode a list/tuple of photo URLs to a JSON string for storage.
+    Returns None for empty/None input so the column stays NULL for listings
+    without photos (cheaper than '[]' and distinguishable from "really empty").
+    """
+    if not image_urls:
+        return None
+    if isinstance(image_urls, (list, tuple)):
+        cleaned = [u for u in image_urls if isinstance(u, str) and u.startswith("http")]
+        if not cleaned:
+            return None
+        return json.dumps(cleaned, ensure_ascii=False)
+    if isinstance(image_urls, str):
+        # Already a JSON string? Try to parse and re-encode; else wrap as a list.
+        try:
+            parsed = json.loads(image_urls)
+            if isinstance(parsed, list):
+                return _encode_image_urls(parsed)
+        except Exception:
+            pass
+        if image_urls.startswith("http"):
+            return json.dumps([image_urls], ensure_ascii=False)
+    return None
+
+
+def _decode_image_urls(raw) -> list[str]:
+    """Decode JSON-encoded image URLs from a DB cell. Always returns a list."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [u for u in raw if isinstance(u, str) and u.startswith("http")]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [u for u in parsed if isinstance(u, str) and u.startswith("http")]
+        except Exception:
+            pass
+    return []
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scrape_runs (
     run_id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +94,7 @@ CREATE TABLE IF NOT EXISTS listings (
     location        TEXT,
     url             TEXT,
     image_url       TEXT,
+    image_urls_json TEXT,                       -- MC-312: JSON-encoded list of all photo URLs
     days_ago        INTEGER,
     is_stale        INTEGER NOT NULL DEFAULT 0,
     -- Persistence fields
@@ -227,6 +271,15 @@ def init_db() -> None:
         except Exception:
             pass  # column already exists
 
+    # MC-312: Add image_urls_json column to listings table (idempotent).
+    # Stores JSON-encoded list of all photo URLs for the gallery carousel;
+    # image_url (singular) remains as the first/primary photo for thumbnails.
+    try:
+        conn.execute("ALTER TABLE listings ADD COLUMN image_urls_json TEXT")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
+
     # Note: do NOT close conn — it is cached in _cached_conn and reused
 
 
@@ -286,10 +339,11 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
             conn.execute("""
                 INSERT INTO listings (
                     listing_id, source, title, price, price_str, beds, baths, sqft,
-                    neighborhood, region, location, url, image_url, days_ago, is_stale,
+                    neighborhood, region, location, url, image_url, image_urls_json,
+                    days_ago, is_stale,
                     first_seen, last_seen, is_active, scrape_count, is_new,
                     fair_value, score, pct_under
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(listing_id) DO UPDATE SET
                     source          = excluded.source,
                     title           = excluded.title,
@@ -303,6 +357,7 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
                     location        = excluded.location,
                     url             = excluded.url,
                     image_url       = excluded.image_url,
+                    image_urls_json = excluded.image_urls_json,
                     days_ago        = excluded.days_ago,
                     is_stale        = excluded.is_stale,
                     last_seen       = excluded.last_seen,
@@ -326,6 +381,7 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
                 row.get("location", ""),
                 row.get("link", ""),
                 row.get("image_url", ""),
+                _encode_image_urls(row.get("image_urls")),  # MC-312
                 row.get("days_ago"),
                 1 if row.get("is_stale") else 0,
                 now, now, 1,  # first_seen, last_seen, is_active

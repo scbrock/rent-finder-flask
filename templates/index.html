@@ -137,6 +137,69 @@
       100% { background-position: -200% 0%; }
     }
 
+    /* MC-312: Listing photo gallery carousel (multi-image) */
+    .listing-gallery { position: relative; margin-bottom: 12px; }
+    .listing-gallery .lg-main {
+      width: 100%;
+      max-height: 280px;
+      object-fit: cover;
+      border-radius: 8px;
+      background: #f1f5f3;
+      display: block;
+    }
+    .listing-gallery .lg-prev,
+    .listing-gallery .lg-next {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 32px; height: 32px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(45, 106, 79, 0.85);
+      color: #fff;
+      font-size: 1.4rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .listing-gallery .lg-prev { left: 8px; }
+    .listing-gallery .lg-next { right: 8px; }
+    .listing-gallery .lg-prev:hover,
+    .listing-gallery .lg-next:hover { background: rgba(45, 106, 79, 1); }
+    .listing-gallery .lg-counter {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      z-index: 1;
+    }
+    .listing-gallery .lg-thumbs {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 8px 0 0;
+      margin-top: 6px;
+    }
+    .listing-gallery .lg-thumb {
+      width: 56px;
+      height: 42px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .listing-gallery .lg-thumb:hover { border-color: #95a99e; }
+    .listing-gallery .lg-thumb.lg-thumb-active { border-color: #2d6a4f; }
+
     .no-deals { text-align: center; padding: 40px; color: #888; }
     .loading { text-align: center; padding: 30px; color: #888; }
 
@@ -335,12 +398,13 @@
       <div id="modal_neighbourhood" style="font-size:1.25rem;font-weight:700;color:#2d6a4f;margin-bottom:4px;"></div>
       <div id="modal_region" style="font-size:0.85rem;color:#666;margin-bottom:16px;"></div>
 
-      <!-- MC-307/MC-308: Listing photo (single hero — Kijiji from scraper, Craigslist from on-demand fetch) -->
+      <!-- MC-307/MC-308/MC-312: Listing photos.
+           MC-307: Kijiji photos from the scraper (single image URL).
+           MC-308: Craigslist photos lazy-fetched via /api/craigslist/photo.
+           MC-312: Gallery carousel — multiple photos rendered by static/listing_gallery.js.
+           The single #modal_photo_wrap is repurposed as the carousel container. -->
       <div id="modal_photo_wrap" style="display:none;margin-bottom:16px;position:relative;">
-        <img id="modal_photo" src="" alt="" loading="lazy" referrerpolicy="no-referrer"
-             style="width:100%;max-height:280px;object-fit:cover;border-radius:8px;background:#f1f5f3;display:block;"
-             onerror="this.parentElement.style.display='none';" />
-        <div id="modal_photo_spinner" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);border-radius:8px;">
+        <div id="modal_photo_spinner" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);border-radius:8px;z-index:2;">
           <div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">⏳ Loading photo…</div>
         </div>
       </div>
@@ -961,42 +1025,52 @@ async function openListingDetail(listingId) {
     document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '—';
     document.getElementById('modal_region').textContent = d.region || '';
 
-    // MC-307: Listing photo (only show if image_url is non-empty)
-    const photoWrap = document.getElementById('modal_photo_wrap');
-    const photoEl = document.getElementById('modal_photo');
-    const photoSpinner = document.getElementById('modal_photo_spinner');
-    if (d.image_url && d.image_url.trim()) {
-      photoEl.src = d.image_url;
-      photoWrap.style.display = 'block';
-      photoSpinner.style.display = 'none';
-    } else {
-      photoEl.src = '';
-      photoWrap.style.display = 'none';
-      photoSpinner.style.display = 'none';
+    // MC-307/MC-308/MC-312: Listing photo(s) — use the gallery carousel if multiple
+    // photos, or a single-image view if only one, or fall back to a Craigslist
+    // lazy fetch when no photos are present initially.
+    const photoWrap = document.getElementById('modal_photo_wrap');  // MC-312: now the carousel container
+    const photoSpinner = document.getElementById('modal_photo_spinner');  // MC-308 spinner, still useful
+    const gallery = window.__listingGallery;
+    // MC-312: prefer the gallery's image_urls list (multiple photos), fall back to image_url (single).
+    let initialImages = Array.isArray(d.image_urls) ? d.image_urls.filter(u => typeof u === 'string' && u.startsWith('http')) : [];
+    if (!initialImages.length && d.image_url && d.image_url.trim()) {
+      initialImages = [d.image_url];
     }
-
-    // MC-308: For Craigslist listings without an image_url, lazy-fetch via the
-    // /api/craigslist/photo endpoint. Shows spinner while waiting, falls back
-    // to house-emoji placeholder if the endpoint returns no image.
     const detailLinkEl = d.link || '';
-    if ((!d.image_url || !d.image_url.trim()) && /craigslist\.org\//.test(detailLinkEl)) {
-      photoSpinner.style.display = 'flex';
+    const isCraigslist = /craigslist\.org\//.test(detailLinkEl);
+
+    if (initialImages.length > 0 && gallery) {
+      // MC-312: render the multi-image carousel (or single image if 1)
+      gallery.renderGallery(initialImages, photoWrap, { alt: d.title || 'Listing photo' });
+      photoSpinner.style.display = 'none';
+    } else if (isCraigslist) {
+      // MC-308: no images yet + CL listing — show spinner while we lazy-fetch
       photoWrap.style.display = 'block';
-      photoEl.alt = 'Loading photo…';
+      while (photoWrap.firstChild) photoWrap.removeChild(photoWrap.firstChild);
+      photoSpinner.style.display = 'flex';
       try {
         const clPhotoResp = await fetch('/api/craigslist/photo?url=' + encodeURIComponent(detailLinkEl));
         if (clPhotoResp.ok) {
           const clPhotoData = await clPhotoResp.json();
           if (clPhotoData.image_url) {
-            photoEl.src = clPhotoData.image_url;
-            photoEl.alt = d.title || 'Listing photo';
+            // Render via the gallery as a single-image carousel
+            if (gallery) {
+              gallery.renderGallery([clPhotoData.image_url], photoWrap, { alt: d.title || 'Listing photo' });
+            } else {
+              // Fallback when the gallery JS failed to load: minimal manual render
+              const img = document.createElement('img');
+              img.src = clPhotoData.image_url;
+              img.alt = d.title || 'Listing photo';
+              img.style.cssText = 'width:100%;max-height:280px;object-fit:cover;border-radius:8px;background:#f1f5f3;display:block;';
+              img.onerror = function () { photoWrap.style.display = 'none'; };
+              while (photoWrap.firstChild) photoWrap.removeChild(photoWrap.firstChild);
+              photoWrap.appendChild(img);
+            }
             photoWrap.style.display = 'block';
           } else {
-            // No image available — hide the photo block entirely
             photoWrap.style.display = 'none';
           }
         } else {
-          // 429 (rate-limited) or 502 (no image) — silently hide
           photoWrap.style.display = 'none';
         }
       } catch (e) {
@@ -1004,6 +1078,11 @@ async function openListingDetail(listingId) {
       } finally {
         photoSpinner.style.display = 'none';
       }
+    } else {
+      // No images, not CL — hide the block entirely
+      while (photoWrap.firstChild) photoWrap.removeChild(photoWrap.firstChild);
+      photoWrap.style.display = 'none';
+      photoSpinner.style.display = 'none';
     }
 
     document.getElementById('modal_price').textContent = d.price_fmt || '—';
@@ -1368,5 +1447,7 @@ async function loadSimilarShortlist() {
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <!-- MC-309: Lazy-load Craigslist photos in deals table thumbnail column -->
 <script src="{{ url_for('static', filename='cl_photo_lazy.js') }}"></script>
+<!-- MC-312: Multi-image gallery carousel for the detail modal -->
+<script src="{{ url_for('static', filename='listing_gallery.js') }}"></script>
 </body>
 </html>

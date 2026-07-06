@@ -113,14 +113,14 @@ def extract_listings(html: str) -> list[dict]:
         # Date
         listed_date = value.get("activationDate", "") or ""
 
-        # First photo URL from imageUrls[] array (MC-307)
-        image_urls = value.get("imageUrls", []) or []
-        # Filter out empty/None values and pick first valid one
-        image_url = ""
-        for u in image_urls:
-            if isinstance(u, str) and u.startswith("http"):
-                image_url = u
-                break
+        # MC-307/MC-312: All photo URLs from imageUrls[] array (MC-312 stores full list
+        # for the gallery carousel; MC-307 keeps first for thumbnails/back-compat).
+        image_urls_raw = value.get("imageUrls", []) or []
+        image_urls = [
+            u for u in image_urls_raw
+            if isinstance(u, str) and u.startswith("http")
+        ]
+        image_url = image_urls[0] if image_urls else ""
 
         listings.append({
             "source": "Kijiji",
@@ -135,6 +135,7 @@ def extract_listings(html: str) -> list[dict]:
             "title": title,
             "description": str(value.get("description", ""))[:500],
             "image_url": image_url,
+            "image_urls": image_urls,  # MC-312: full list for gallery carousel
         })
 
     return listings

@@ -46,8 +46,13 @@ class TestExtractImageUrls:
             {"id": "222", "imageUrls": ["https://media.kijiji.ca/abc"]},
         ])
         result = _extract_image_urls(html)
-        assert result["111"] == "https://media.kijiji.ca/api/v1/img1?rule=kijijica-200-jpg"
-        assert result["222"] == "https://media.kijiji.ca/abc"
+        # MC-312: returns dict with "first" (for thumbnails) and "all" (for gallery).
+        assert result["111"]["first"] == "https://media.kijiji.ca/api/v1/img1?rule=kijijica-200-jpg"
+        assert result["222"]["first"] == "https://media.kijiji.ca/abc"
+        assert result["111"]["all"] == [
+            "https://media.kijiji.ca/api/v1/img1?rule=kijijica-200-jpg",
+            "https://media.kijiji.ca/api/v1/img2?rule=kijijica-200-jpg",
+        ]
         assert len(result) == 2
 
     def test_handles_empty_image_urls(self):
@@ -69,7 +74,28 @@ class TestExtractImageUrls:
             ]},
         ])
         result = _extract_image_urls(html)
-        assert result["555"] == "https://valid.kijiji.ca/photo.jpg"
+        assert result["555"]["first"] == "https://valid.kijiji.ca/photo.jpg"
+        assert result["555"]["all"] == ["https://valid.kijiji.ca/photo.jpg"]
+
+
+class TestExtractImageUrlsLegacyCompat:
+    """MC-307 -> MC-312 compatibility: existing callers passing legacy
+    'just-the-first-URL-string' format still work (parse_html_cards handles
+    both shapes via isinstance check)."""
+
+    def test_parse_html_cards_accepts_dict_or_legacy_string(self):
+        from scrape_kijiji import parse_html_cards
+        html = """<section data-testid="listing-card" data-listingid="LEG">
+            <h3 data-testid="listing-title"><a href="/v-apartments-condos/toronto/legacy/LEG">Legacy listing for rent</a></h3>
+            <p data-testid="listing-price">$1,700 /month</p>
+            <p data-testid="listing-location">Toronto</p>
+        </section>"""
+        # Dict shape (MC-312)
+        listings = parse_html_cards(html, {}, {"LEG": {"first": "http://a/dict.jpg", "all": ["http://a/dict.jpg"]}})
+        assert listings[0].image_url == "http://a/dict.jpg"
+        # Legacy string shape still works (back-compat)
+        listings2 = parse_html_cards(html, {}, {"LEG": "http://a/string.jpg"})
+        assert listings2[0].image_url == "http://a/string.jpg"
 
     def test_returns_empty_dict_for_no_next_data(self):
         assert _extract_image_urls("<html><body></body></html>") == {}
