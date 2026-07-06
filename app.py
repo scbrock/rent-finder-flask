@@ -170,6 +170,7 @@ def _normalize_row(r: dict) -> dict:
             'commute_minutes': float(r['commute_minutes']) if r.get('commute_minutes', '') not in ('', 'None', 'nan', None) else None,
             'link': r.get('url') or r.get('link', ''),
             'final_score': round(final_score, 3) if final_score else 0,
+            'image_url': r.get('image_url', '') or '',  # MC-307: listing photo URL
         }
         # MC-267: Enrich with grocery store proximity from poi_cache
         poi_cache = _load_poi_cache()
@@ -519,6 +520,7 @@ def _build_listing_detail_response(d: dict, idx: int):
         'is_stale': d.get('is_stale'),
         'commute_minutes': d.get('commute_minutes'),
         'link': d.get('link'),
+        'image_url': d.get('image_url', ''),  # MC-307: listing photo
         'cautions': expanded_cautions,
         'breakdown': breakdown,
     })

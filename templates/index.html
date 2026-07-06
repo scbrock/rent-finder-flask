@@ -108,6 +108,18 @@
     .star-btn:hover { color: #f39c12; }
     .star-btn.saved { color: #f39c12; }
 
+    /* ── Listing photos (MC-307) ── */
+    .thumb-cell { width: 78px; padding: 4px 6px; }
+    .deal-thumb {
+      width: 64px; height: 48px; object-fit: cover; border-radius: 6px;
+      background: #f1f5f3; display: block;
+    }
+    .deal-thumb-fallback {
+      width: 64px; height: 48px; background: #f1f5f3; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; color: #95a99e;
+    }
+
     .no-deals { text-align: center; padding: 40px; color: #888; }
     .loading { text-align: center; padding: 30px; color: #888; }
 
@@ -306,6 +318,13 @@
       <div id="modal_neighbourhood" style="font-size:1.25rem;font-weight:700;color:#2d6a4f;margin-bottom:4px;"></div>
       <div id="modal_region" style="font-size:0.85rem;color:#666;margin-bottom:16px;"></div>
 
+      <!-- MC-307: Listing photo (single hero — only first image is collected by the scraper) -->
+      <div id="modal_photo_wrap" style="display:none;margin-bottom:16px;">
+        <img id="modal_photo" src="" alt="" loading="lazy" referrerpolicy="no-referrer"
+             style="width:100%;max-height:280px;object-fit:cover;border-radius:8px;background:#f1f5f3;display:block;"
+             onerror="this.parentElement.style.display='none';" />
+      </div>
+
       <!-- Price Hero -->
       <div style="background:#e8f5e9;border-radius:8px;padding:16px;margin-bottom:16px;text-align:center;">
         <div id="modal_price" style="font-size:2rem;font-weight:800;color:#2d6a4f;"></div>
@@ -368,6 +387,7 @@
     <thead>
       <tr>
         <th onclick="sortTable('score')">Score</th>
+        <th title="Listing photo" style="width:78px;">Photo</th>
         <th onclick="sortTable('neighbourhood')">Neighbourhood</th>
         <th onclick="sortTable('region')">Region</th>
         <th onclick="sortTable('beds')">BD</th>
@@ -757,6 +777,13 @@ function renderDeals(deals) {
 
     const row = `<tr data-listing-id="${d.listing_id || d.link || ''}">
       <td style="font-size:1.1rem;font-weight:800;color:#2d6a4f;text-align:center;" title="Deal score - higher is better">${d.final_score ? d.final_score.toFixed(3) : (d.score || 0).toFixed(3)}</td>
+      <td class="thumb-cell">${(() => {
+        const img = (d.image_url || '').trim();
+        if (img) {
+          return `<img class="deal-thumb" loading="lazy" src="${img.replace(/"/g, '&quot;')}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><div class="deal-thumb-fallback" style="display:none;">🏠</div>`;
+        }
+        return '<div class="deal-thumb-fallback">🏠</div>';
+      })()}</td>
       <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag}</td>
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
@@ -903,6 +930,17 @@ async function openListingDetail(listingId) {
 
     document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '—';
     document.getElementById('modal_region').textContent = d.region || '';
+
+    // MC-307: Listing photo (only show if image_url is non-empty)
+    const photoWrap = document.getElementById('modal_photo_wrap');
+    const photoEl = document.getElementById('modal_photo');
+    if (d.image_url && d.image_url.trim()) {
+      photoEl.src = d.image_url;
+      photoWrap.style.display = 'block';
+    } else {
+      photoEl.src = '';
+      photoWrap.style.display = 'none';
+    }
 
     document.getElementById('modal_price').textContent = d.price_fmt || '—';
     document.getElementById('modal_fair_value').textContent = d.fair_value_fmt ? `vs fair value ${d.fair_value_fmt}` : '';

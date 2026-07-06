@@ -186,7 +186,7 @@ def _save_raw(listings, date_str: str):
                 "beds_raw": str(lst.get("beds", "")),
                 "baths_raw": str(lst.get("baths", "")),
                 "url": lst.get("url", ""),
-                "image_url": "",
+                "image_url": lst.get("image_url", ""),  # MC-307: Kijiji imageUrls[0]
             })
         else:
             # dataclass objects (craigslist)
@@ -252,6 +252,7 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
                     "days_ago": days_ago,
                     "is_stale": is_stale,
                     "link": lst.get("url", ""),
+                    "image_url": lst.get("image_url", ""),  # MC-307: photo from Kijiji imageUrls[]
                 })
     except Exception as e:
         print(f"  Kijiji error: {e}")
@@ -286,6 +287,7 @@ def scrape_craigslist(pages: int = 5) -> pd.DataFrame:
                 "days_ago": lst.days_ago,
                 "is_stale": lst.is_stale,
                 "link": lst.url,
+                "image_url": getattr(lst, "image_url", ""),  # MC-307: Craigslist search has no images
             })
     except Exception as e:
         print(f"  Craigslist error: {e}")

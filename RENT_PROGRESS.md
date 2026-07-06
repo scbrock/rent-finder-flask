@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 Pipeline Maintenance — MC-288/MC-290 resolved (Viewit/Rentals blocked, Apollo infeasible). MC-291: fix /healthz on Render
-**Last Updated:** 2026-04-22 10:43 UTC
+**Current Phase:** 🔄 Pipeline Maintenance — all MC-2xx complete. Pipeline healthy at ~400 listings/run.
+**Last Updated:** 2026-04-22 22:43 UTC
 
 ---
 
@@ -26,6 +26,7 @@
 
 ---
 
+| 2026-04-22 (22:43 UTC) | Pipeline Run — idle | 407 listings (215 Kijiji + 311 Craigslist). 250 deals (61% deal rate). Best: Toronto 2BR $700 (+73.2%, FV $2607). No backlog tickets remaining. | 407 | 250 | Toronto 2BR $700 (+73.2%) | No backlog tickets. All MC-2xx complete. Going idle. |
 | 2026-04-22 (08:43 UTC) | Pipeline run (cron cycle) | Pipeline: 372 listings (210 Kijiji + 314 Craigslist, deduped). 218 deals (56%). Best: Toronto 2BR $700 (+73.3% under FV $2623). MC-288 (Viewit/Rentals blocked) resolved - liv.rent is next target. MC-291 created: fix /healthz 404 on Render. Git push b3e9709 committed to clean_build. | 372 (209 Kijiji + 314 Craigslist) | 218/372 (58.6%) | Toronto 2BR $700 (+73.3%) | Discord webhook not configured. /healthz 404 on Render - clean_build needs fresh deploy. |
 
 ## Next Up
@@ -242,3 +243,10 @@ Given two shortlisted listings A and B, show a side-by-side: "Listing A saves $X
 ## Blockers
 
 - **MC-276 DEPLOY BLOCKED (2026-04-17):** GitHub Actions workflow `deploy.yml` uses `JorgeLNJunior/render-deploy@v1.5.0` which requires `RENDER_SERVICE_ID` GitHub secret in addition to `RENDER_API_KEY` (already set). Missing secret: `RENDER_SERVICE_ID`. User needs to add this from dashboard.render.com — rent-finder-flask service — Settings — General. Steps: dashboard.render.com -> rent-finder-flask -> Settings -> General -> copy SERVICE_ID -> add to GitHub secrets as RENDER_SERVICE_ID. Then push clean_build.
+
+
+## 2026-04-23 (01:40 UTC) — Pipeline Run
+- **374 listings** (211 Kijiji + 315 Craigslist, 374 deduped) | **231 deals** (61.8% deal rate)
+- Best: Toronto 2BR \ (FV=\, +72.9%, score=1.000)
+- Discord: No DISCORD_RENT_WEBHOOK env var set — skipping post (pipeline logs to console only)
+- Pipeline: healthy, no errors

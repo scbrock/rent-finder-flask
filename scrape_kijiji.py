@@ -84,7 +84,9 @@ def _is_rental_title(title: str) -> bool:
 
 
 def _extract_activation_dates(html: str) -> dict:
-    """Extract listing_id -> activationDate from __NEXT_DATA__ JSON in HTML."""
+    """Extract listing_id -> activationDate from __NEXT_DATA__ JSON in HTML.
+    Returns dict mapping listing_id (str) -> activationDate (ISO string).
+    """
     import datetime as _dt, re as _re, json as _json
     match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.DOTALL)
     if not match:
@@ -106,6 +108,34 @@ def _extract_activation_dates(html: str) -> dict:
         return {}
 
 
+def _extract_image_urls(html: str) -> dict:
+    """Extract listing_id -> first imageUrl from __NEXT_DATA__ JSON in HTML.
+    MC-307: Returned alongside activation dates; used to populate image_url
+    on each parsed listing card.
+    """
+    import re as _re, json as _json
+    match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.DOTALL)
+    if not match:
+        return {}
+    try:
+        data = _json.loads(match.group(1))
+        apollo = data.get("props", {}).get("pageProps", {}).get("__APOLLO_STATE__", {})
+        result = {}
+        for key, val in apollo.items():
+            if isinstance(val, dict) and val.get("__typename") == "RealEstateListing":
+                listing_id = val.get("id", "")
+                if isinstance(listing_id, str):
+                    listing_id = listing_id.strip("'")
+                image_urls = val.get("imageUrls", []) or []
+                for u in image_urls:
+                    if isinstance(u, str) and u.startswith("http"):
+                        result[listing_id] = u
+                        break
+        return result
+    except Exception:
+        return {}
+
+
 def _compute_days(activation_str: str) -> tuple:
     """Parse activationDate ISO string, return (days_ago, is_stale)."""
     import datetime as _dt
@@ -118,7 +148,7 @@ def _compute_days(activation_str: str) -> tuple:
         return 5, False
 
 
-def parse_html_cards(html: str, activation_dates: dict) -> list[Listing]:
+def parse_html_cards(html: str, activation_dates: dict, image_urls: dict | None = None) -> list[Listing]:
     """Parse SSR listing cards from Kijiji HTML.
 
     Card structure (confirmed):
@@ -128,6 +158,7 @@ def parse_html_cards(html: str, activation_dates: dict) -> list[Listing]:
         <p data-testid="listing-location">  Address, Neighbourhood  </p>
         <img data-testid="listing-card-image" src="https://..." />
     """
+    image_urls = image_urls or {}
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("section", {"data-testid": "listing-card"})
     listings = []
@@ -175,6 +206,10 @@ def parse_html_cards(html: str, activation_dates: dict) -> list[Listing]:
         # Image
         img_el = card.find("img", {"data-testid": "listing-card-image"})
         image_url = img_el.get("src", "") if img_el else ""
+        # MC-307: prefer JSON imageUrls[] (real photo) over the lazy-loaded card src
+        json_image = image_urls.get(str(lst_id), "")
+        if json_image:
+            image_url = json_image
 
         # Days_ago and is_stale from __NEXT_DATA__ activation dates
         activation = activation_dates.get(str(lst_id), "")
@@ -233,7 +268,8 @@ def scrape(
                 break
 
             activation_dates = _extract_activation_dates(r.text)
-            page_listings = parse_html_cards(r.text, activation_dates)
+            image_urls = _extract_image_urls(r.text)
+            page_listings = parse_html_cards(r.text, activation_dates, image_urls)
             new = [l for l in page_listings if l.listing_id not in seen]
             seen.update(l.listing_id for l in new)
             all_listings.extend(new)

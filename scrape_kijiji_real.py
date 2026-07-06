@@ -113,6 +113,15 @@ def extract_listings(html: str) -> list[dict]:
         # Date
         listed_date = value.get("activationDate", "") or ""
 
+        # First photo URL from imageUrls[] array (MC-307)
+        image_urls = value.get("imageUrls", []) or []
+        # Filter out empty/None values and pick first valid one
+        image_url = ""
+        for u in image_urls:
+            if isinstance(u, str) and u.startswith("http"):
+                image_url = u
+                break
+
         listings.append({
             "source": "Kijiji",
             "price": price,
@@ -125,6 +134,7 @@ def extract_listings(html: str) -> list[dict]:
             "url": url,
             "title": title,
             "description": str(value.get("description", ""))[:500],
+            "image_url": image_url,
         })
 
     return listings
