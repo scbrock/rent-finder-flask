@@ -318,11 +318,14 @@
       <div id="modal_neighbourhood" style="font-size:1.25rem;font-weight:700;color:#2d6a4f;margin-bottom:4px;"></div>
       <div id="modal_region" style="font-size:0.85rem;color:#666;margin-bottom:16px;"></div>
 
-      <!-- MC-307: Listing photo (single hero — only first image is collected by the scraper) -->
-      <div id="modal_photo_wrap" style="display:none;margin-bottom:16px;">
+      <!-- MC-307/MC-308: Listing photo (single hero — Kijiji from scraper, Craigslist from on-demand fetch) -->
+      <div id="modal_photo_wrap" style="display:none;margin-bottom:16px;position:relative;">
         <img id="modal_photo" src="" alt="" loading="lazy" referrerpolicy="no-referrer"
              style="width:100%;max-height:280px;object-fit:cover;border-radius:8px;background:#f1f5f3;display:block;"
              onerror="this.parentElement.style.display='none';" />
+        <div id="modal_photo_spinner" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);border-radius:8px;">
+          <div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">⏳ Loading photo…</div>
+        </div>
       </div>
 
       <!-- Price Hero -->
@@ -934,12 +937,46 @@ async function openListingDetail(listingId) {
     // MC-307: Listing photo (only show if image_url is non-empty)
     const photoWrap = document.getElementById('modal_photo_wrap');
     const photoEl = document.getElementById('modal_photo');
+    const photoSpinner = document.getElementById('modal_photo_spinner');
     if (d.image_url && d.image_url.trim()) {
       photoEl.src = d.image_url;
       photoWrap.style.display = 'block';
+      photoSpinner.style.display = 'none';
     } else {
       photoEl.src = '';
       photoWrap.style.display = 'none';
+      photoSpinner.style.display = 'none';
+    }
+
+    // MC-308: For Craigslist listings without an image_url, lazy-fetch via the
+    // /api/craigslist/photo endpoint. Shows spinner while waiting, falls back
+    // to house-emoji placeholder if the endpoint returns no image.
+    const detailLinkEl = d.link || '';
+    if ((!d.image_url || !d.image_url.trim()) && /craigslist\.org\//.test(detailLinkEl)) {
+      photoSpinner.style.display = 'flex';
+      photoWrap.style.display = 'block';
+      photoEl.alt = 'Loading photo…';
+      try {
+        const clPhotoResp = await fetch('/api/craigslist/photo?url=' + encodeURIComponent(detailLinkEl));
+        if (clPhotoResp.ok) {
+          const clPhotoData = await clPhotoResp.json();
+          if (clPhotoData.image_url) {
+            photoEl.src = clPhotoData.image_url;
+            photoEl.alt = d.title || 'Listing photo';
+            photoWrap.style.display = 'block';
+          } else {
+            // No image available — hide the photo block entirely
+            photoWrap.style.display = 'none';
+          }
+        } else {
+          // 429 (rate-limited) or 502 (no image) — silently hide
+          photoWrap.style.display = 'none';
+        }
+      } catch (e) {
+        photoWrap.style.display = 'none';
+      } finally {
+        photoSpinner.style.display = 'none';
+      }
     }
 
     document.getElementById('modal_price').textContent = d.price_fmt || '—';

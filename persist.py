@@ -168,6 +168,13 @@ CREATE TABLE IF NOT EXISTS sms_subscriptions (
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     last_alerted    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS craigslist_photo_cache (
+    listing_url  TEXT    PRIMARY KEY,
+    image_url    TEXT,                     -- NULL if negative cache (fetch failed)
+    fetched_at   INTEGER NOT NULL,         -- unix epoch seconds
+    is_negative  INTEGER NOT NULL DEFAULT 0 -- 1 if negative cache (error/404/no image)
+);
 """
 
 
@@ -1267,3 +1274,118 @@ def update_sms_last_alerted(phone: str):
     finally:
         conn.close()
 
+
+
+# ── Craigslist photo cache (MC-308) ───────────────────────────────────────
+#
+# On-demand fetch of Craigslist listing photos. Search pages don't include
+# thumbnails (MC-307 finding), so each detail-view needs an HTTP fetch of the
+# individual listing page. Cached per listing_url with TTL:
+#   - Positive hits: POSITIVE_TTL_SECS (14 days)
+#   - Negative hits (404/timeout/parse-fail): NEGATIVE_TTL_SECS (1 hour)
+#
+# Cache row layout: craigslist_photo_cache
+#   listing_url TEXT PRIMARY KEY
+#   image_url   TEXT NULL                  -- NULL when is_negative=1
+#   fetched_at  INTEGER (unix epoch secs)
+#   is_negative INTEGER (0/1)
+
+POSITIVE_TTL_SECS = 14 * 24 * 60 * 60      # 14 days
+NEGATIVE_TTL_SECS = 60 * 60                # 1 hour
+
+
+def _cl_photo_cache_fresh(row, now_ts):
+    # True if a cached row is still within its TTL window.
+    if not row:
+        return False
+    elapsed = now_ts - int(row[2])
+    if int(row[3]) == 1:
+        return elapsed < NEGATIVE_TTL_SECS
+    return elapsed < POSITIVE_TTL_SECS
+
+
+def get_craigslist_photo_cache(listing_url, *, now_ts=None):
+    # Return cached photo row for listing_url if it exists and is fresh.
+    # Negative hits return with image_url=None and is_negative=1 — caller
+    # should treat them as 'we know there's no photo for this one, don't retry'.
+    if not listing_url:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            'SELECT listing_url, image_url, fetched_at, is_negative '
+            'FROM craigslist_photo_cache WHERE listing_url = ?',
+            (listing_url,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        now = now_ts if now_ts is not None else int(datetime.now(timezone.utc).timestamp())
+        if not _cl_photo_cache_fresh(row, now):
+            return None
+        return {
+            'listing_url': row[0],
+            'image_url': row[1],
+            'fetched_at': int(row[2]),
+            'is_negative': int(row[3]),
+        }
+    finally:
+        conn.close()
+
+
+def upsert_craigslist_photo_cache(
+    listing_url,
+    image_url,
+    *,
+    is_negative=False,
+    now_ts=None,
+):
+    # Insert or replace a cache row for listing_url.
+    if not listing_url:
+        return
+    init_db()
+    conn = _get_conn()
+    try:
+        now = now_ts if now_ts is not None else int(datetime.now(timezone.utc).timestamp())
+        conn.execute(
+            "INSERT INTO craigslist_photo_cache (listing_url, image_url, fetched_at, is_negative)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(listing_url) DO UPDATE SET"
+            "     image_url = excluded.image_url,"
+            "     fetched_at = excluded.fetched_at,"
+            "     is_negative = excluded.is_negative",
+            (listing_url, image_url, now, 1 if is_negative else 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_recent_cl_photo_fetches(window_secs, *, now_ts=None):
+    # Count cache rows written within the last window_secs. Used by the rate
+    # limiter to enforce max fetches per cron cycle.
+    init_db()
+    conn = _get_conn()
+    try:
+        now = now_ts if now_ts is not None else int(datetime.now(timezone.utc).timestamp())
+        cur = conn.execute(
+            'SELECT COUNT(*) AS n FROM craigslist_photo_cache '
+            'WHERE fetched_at >= ?',
+            (now - window_secs,)
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def reset_craigslist_photo_cache():
+    # Clear the entire craigslist_photo_cache table. Tests only.
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute('DELETE FROM craigslist_photo_cache')
+        conn.commit()
+    finally:
+        conn.close()

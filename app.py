@@ -1354,3 +1354,119 @@ def api_telegram_webhook():
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
+
+
+# ── MC-308: Craigslist on-demand photo fetch ────────────────────────────────
+#
+# Craigslist search pages don't expose photos (MC-307 self-audit). When a
+# user opens a Craigslist listing detail modal, this endpoint lazily fetches
+# the individual listing page, extracts the first image, caches the result
+# in `craigslist_photo_cache`, and returns the image URL.
+#
+# Rate limit: max 30 fetches per rolling 2-hour window (cron pipeline cycle).
+# Cache TTL:  positive = 14 days, negative (404/timeout/parse-fail) = 1 hour.
+#
+# Endpoint contract:
+#   GET /api/craigslist/photo?url=<listing_url>&token=<opaque>
+#     200  -> {image_url, cached, fetched, is_negative}
+#     400  -> missing or non-craigslist url
+#     429  -> rate limited (budget exhausted)
+#     502  -> upstream fetch error / no image
+
+import craigslist_photo_fetcher as _cl_fetcher
+from persist import (
+    get_craigslist_photo_cache,
+    upsert_craigslist_photo_cache,
+    get_recent_cl_photo_fetches,
+)
+
+# 30 fetches per 2-hour cron cycle matches the live scrape cadence.
+CL_PHOTO_BUDGET_PER_CYCLE = 30
+CL_PHOTO_CYCLE_WINDOW_SECS = 2 * 60 * 60  # 2 hours
+_LAST_CL_FETCH_AT = [0.0]  # module-level lock for 1 req/sec
+_CL_FETCH_LOCK = __import__('threading').Lock()
+
+
+def _is_craigslist_url(url):
+    # Defensive: only fetch from craigslist.org to prevent SSRF.
+    if not url or not isinstance(url, str):
+        return False
+    u = url.strip().lower()
+    return u.startswith('https://') and 'craigslist.org/' in u
+
+
+def _cl_throttle():
+    # Enforce 1 req/sec between consecutive Craigslist fetches so we don't
+    # trip the site's basic anti-bot heuristics.
+    import time as _time
+    with _CL_FETCH_LOCK:
+        now = _time.monotonic()
+        delta = now - _LAST_CL_FETCH_AT[0]
+        if delta < 1.0:
+            _time.sleep(1.0 - delta)
+        _LAST_CL_FETCH_AT[0] = _time.monotonic()
+
+
+def _cl_rate_limit_ok():
+    # True if we still have budget in the current cycle. Resets every
+    # CL_PHOTO_CYCLE_WINDOW_SECS based on cache write timestamps.
+    used = get_recent_cl_photo_fetches(CL_PHOTO_CYCLE_WINDOW_SECS)
+    return used < CL_PHOTO_BUDGET_PER_CYCLE, used
+
+
+@app.route('/api/craigslist/photo')
+def api_craigslist_photo():
+    listing_url = request.args.get('url', '').strip()
+    if not listing_url:
+        return jsonify({'error': 'url required'}), 400
+    if not _is_craigslist_url(listing_url):
+        return jsonify({'error': 'url must be a craigslist.org URL'}), 400
+
+    # 1) Cache hit path
+    cached = get_craigslist_photo_cache(listing_url)
+    if cached is not None:
+        return jsonify({
+            'listing_url': listing_url,
+            'image_url': cached['image_url'],
+            'cached': True,
+            'is_negative': bool(cached['is_negative']),
+        })
+
+    # 2) Rate-limit check
+    ok, used = _cl_rate_limit_ok()
+    if not ok:
+        return jsonify({
+            'error': 'budget_exhausted',
+            'message': f'Craigslist photo fetch budget exhausted '
+                       f'({used}/{CL_PHOTO_BUDGET_PER_CYCLE} per '
+                       f'{CL_PHOTO_CYCLE_WINDOW_SECS // 60}min)',
+        }), 429
+
+    # 3) Throttle (1 req/sec)
+    _cl_throttle()
+
+    # 4) Upstream fetch
+    try:
+        image_url = _cl_fetcher.fetch_listing_photo(listing_url)
+    except Exception as e:
+        # Treat unhandled error as negative cache to avoid tight retry loop
+        upsert_craigslist_photo_cache(listing_url, None, is_negative=True)
+        return jsonify({'error': 'fetch_error', 'message': str(e)}), 502
+
+    if not image_url:
+        upsert_craigslist_photo_cache(listing_url, None, is_negative=True)
+        return jsonify({
+            'listing_url': listing_url,
+            'image_url': None,
+            'cached': False,
+            'is_negative': True,
+        }), 502
+
+    # 5) Cache positive result
+    upsert_craigslist_photo_cache(listing_url, image_url, is_negative=False)
+    return jsonify({
+        'listing_url': listing_url,
+        'image_url': image_url,
+        'cached': False,
+        'is_negative': False,
+    })
