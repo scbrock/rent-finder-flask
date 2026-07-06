@@ -480,6 +480,103 @@ def api_listing_detail_by_id():
     return _build_listing_detail_response(d, idx)
 
 
+@app.route('/api/compare')
+def api_compare():
+    """
+    MC-313: Side-by-side deal comparison.
+
+    Query: ?ids=<listing_id1>,<listing_id2>[,<listing_id3>]
+    Returns a JSON object with the requested listings (2 or 3) and a `best` block
+    identifying the winning column per metric (lowest price, lowest $/sqft,
+    lowest $ over fair value, most photos).
+
+    Errors:
+      400 if `ids` missing, blank, wrong count (<2 or >3), or any individual id empty
+      404 if any requested id is not found in the current deal list
+    """
+    raw = request.args.get('ids', '').strip()
+    if not raw:
+        return jsonify({'error': 'ids query param required (comma-separated listing_ids)'}), 400
+
+    parts = [p.strip() for p in raw.split(',') if p.strip()]
+    if len(parts) < 2 or len(parts) > 3:
+        return jsonify({'error': '2 or 3 listing ids required'}), 400
+    # De-dupe while preserving user-supplied order
+    seen = set()
+    ordered = []
+    for p in parts:
+        if p in seen:
+            return jsonify({'error': f'duplicate id: {p}'}), 400
+        seen.add(p)
+        ordered.append(p)
+
+    deals = load_deals()
+    by_id = {d.get('listing_id'): d for d in deals if d.get('listing_id')}
+
+    normalized = []
+    missing = []
+    for lid in ordered:
+        d = by_id.get(lid)
+        if d is None:
+            missing.append(lid)
+            continue
+        # Re-normalize through the same pipeline so we don't depend on the caller's
+        # in-memory shape. _normalize_row is idempotent for already-normalized dicts
+        # because it only reads fields that survive the round-trip.
+        norm = _normalize_row(d)
+        if norm is None:
+            missing.append(lid)
+            continue
+        # Compute $/sqft for best-value highlighting (None if sqft missing/zero)
+        sqft = norm.get('sqft')
+        try:
+            sqft_n = float(sqft) if sqft not in (None, '', 'None', 'nan') else None
+        except (ValueError, TypeError):
+            sqft_n = None
+        norm['sqft_num'] = sqft_n
+        norm['price_per_sqft'] = round(norm['price'] / sqft_n, 2) if (sqft_n and sqft_n > 0 and norm['price']) else None
+        norm['photo_count'] = len(norm.get('image_urls') or ([norm['image_url']] if norm.get('image_url') else []))
+        norm['savings'] = round(float(norm.get('fair_value') or 0) - float(norm.get('price') or 0), 2)
+        normalized.append(norm)
+
+    if missing:
+        return jsonify({'error': 'Listing not found', 'missing_ids': missing}), 404
+    if len(normalized) != len(ordered):
+        # Defensive: _normalize_row returned None for an id we located
+        return jsonify({'error': 'failed to normalize one or more listings'}), 500
+
+    # Determine best-value winners per metric. Lower is better for all price
+    # metrics; higher is better for photo count.
+    best = {}
+    def _winner(metric, mode='min'):
+        candidates = []
+        for d in normalized:
+            v = d.get(metric)
+            if v is None:
+                continue
+            try:
+                candidates.append((float(v), d['listing_id']))
+            except (ValueError, TypeError):
+                continue
+        if not candidates:
+            return None
+        if mode == 'min':
+            candidates.sort(key=lambda t: t[0])
+        else:
+            candidates.sort(key=lambda t: -t[0])
+        return candidates[0][1]
+
+    best['lowest_price'] = _winner('price', 'min')
+    best['lowest_price_per_sqft'] = _winner('price_per_sqft', 'min')
+    # "Lowest $ over fair value" == smallest savings (savings = FV - price).
+    # A negative savings means the listing is priced above FV. The smallest
+    # (least-negative or most-positive) savings is the best value relative to FV.
+    best['smallest_savings_gap'] = _winner('savings', 'max')  # max savings = best deal
+    best['most_photos'] = _winner('photo_count', 'max')
+
+    return jsonify({'listings': normalized, 'best': best})
+
+
 @app.route('/api/listing/<int:listing_idx>')
 def api_listing_detail(listing_idx: int):
     """
