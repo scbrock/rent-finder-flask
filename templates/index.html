@@ -86,6 +86,9 @@
                    font-size: 0.7rem; font-weight: 700; }
     .new-tag { background: #c3f0ca; color: #0d5c26; padding: 1px 6px; border-radius: 8px;
                font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
+    /* MC-323: small inline count badge next to the "Only NEW" toggle label */
+    #only_new_count { font-size: 0.7rem; color: #0d5c26; margin-left: 2px; font-weight: 600; }
+    #only_new_toggle.active { background: #c3f0ca; border-color: #0d5c26; color: #0d5c26; }
 
     /* ── Source badge (MC-316) ── */
     .source-badge { display: inline-block; padding: 1px 6px; border-radius: 8px;
@@ -114,6 +117,19 @@
                 color: #bbb; transition: color 0.15s; }
     .star-btn:hover { color: #f39c12; }
     .star-btn.saved { color: #f39c12; }
+
+    /* ── MC-321: Neighbourhood stats drill-down link ── */
+    .nbhd-stats-link {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 0 4px;
+      font-size: 0.78rem;
+      text-decoration: none;
+      color: #6c7a89;
+      opacity: 0.7;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .nbhd-stats-link:hover { opacity: 1.0; color: #2d6a4f; }
 
     /* ── Listing photos (MC-307) ── */
     .thumb-cell { width: 78px; padding: 4px 6px; }
@@ -398,9 +414,19 @@
       <span>🚫 Hide Stale (&gt;30d)</span>
     </label>
 
+    <!-- Only NEW (6h) toggle (MC-323): surface listings first seen in the
+         last 6 hours (MC-264 is_new=1 flag). The count badge next to the
+         label is populated from /api/meta.new_count. -->
+    <label class="toggle-btn" id="only_new_toggle" title="Show only listings first seen in the last 6 hours">
+      <input type="checkbox" id="only_new">
+      <span>✨ Only NEW <span id="only_new_count">(…)</span></span>
+    </label>
+
     <div style="display:flex;gap:6px;align-items:flex-end;">
       <button id="filter_apply" onclick="loadDeals()">Filter</button>
       <button id="filter_reset" onclick="resetFilters()">Reset</button>
+      <button id="save_search_btn" type="button" style="background:#fff;color:#2d6a4f;border:1px solid #2d6a4f;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;" onclick="openSaveSearchModal()" title="Snapshot the current filter combo so you can reload it later">🔖 Save filters</button>
+      <a id="saved_searches_link" href="/saved-searches" style="background:#f7f8f5;color:#2d6a4f;border:1px solid #ccd5cc;padding:8px 14px;border-radius:6px;text-decoration:none;font-weight:600;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;" title="Open your saved filter snapshots">🔖 Saved</a>
       <button id="compare_btn" style="display:none;background:#2d6a4f;color:white;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;" onclick="window.__compare.openCompareModal()" title="Open side-by-side comparison">
         <span id="compare_btn_label">Compare 2</span>
       </button>
@@ -566,6 +592,14 @@
     <tbody id="deals_body"></tbody>
   </table>
 
+  <!-- MC-319: Pagination footer with Load more button + loaded/total indicator -->
+  <div id="pagination_footer" style="text-align: center; padding: 16px 0; margin: 8px 0 20px;">
+    <div id="pagination_status" style="font-size: 0.88rem; color: #666; margin-bottom: 10px;"></div>
+    <button id="load_more_btn" type="button"
+            style="display:none;padding:10px 22px;border-radius:6px;background:#2d6a4f;color:#fff;border:none;font-weight:600;font-size:0.92rem;cursor:pointer;"
+            onclick="loadMoreDeals()">Load more</button>
+  </div>
+
   <!-- MC-263: Alert subscription form -->
   <div style="margin: 20px 0; padding: 16px; background: #f0f7ff; border-radius: 8px; border: 1px solid #c3d9f0;">
     <div style="font-weight: 700; font-size: 1rem; color: #1a3a5c; margin-bottom: 10px;">📬 Get Deal Alerts</div>
@@ -618,6 +652,31 @@
   </div>
 </div>
 
+<!-- MC-322: Save Current Filters modal -->
+<div id="save_search_modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1100;align-items:center;justify-content:center;">
+  <div style="background:white;border-radius:10px;max-width:460px;width:100%;padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,0.3);position:relative;">
+    <button onclick="closeSaveSearchModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:1.4rem;cursor:pointer;color:#666;" aria-label="Close save search modal">×</button>
+    <h2 style="font-size:1.2rem;color:#2d6a4f;margin:0 0 6px;">🔖 Save current filters</h2>
+    <p style="margin:0 0 16px;font-size:0.85rem;color:#666;">Snapshot the filters you have right now. Open <a href="/saved-searches" target="_blank" rel="noopener">Saved Searches</a> anytime to reload.</p>
+    <form id="save_search_form" onsubmit="event.preventDefault(); submitSaveSearch();">
+      <label style="display:block;font-size:0.8rem;font-weight:700;color:#555;margin-bottom:4px;">Name this search</label>
+      <input id="save_search_name" type="text" maxlength="80" required placeholder="e.g. Liberty Village 1BR &lt; $2500" style="width:100%;padding:8px 10px;border:1px solid #ccd5cc;border-radius:6px;font-size:0.95rem;margin-bottom:12px;">
+      <label style="display:block;font-size:0.8rem;font-weight:700;color:#555;margin-bottom:4px;">Your email <span style="color:#888;font-weight:500;">(so you can manage it later)</span></label>
+      <input id="save_search_email" type="email" required placeholder="you@example.com" style="width:100%;padding:8px 10px;border:1px solid #ccd5cc;border-radius:6px;font-size:0.95rem;margin-bottom:6px;">
+      <div id="save_search_email_hint" style="font-size:0.78rem;color:#2d6a4f;margin-bottom:14px;display:none;">✓ We&apos;ll remember this for next time.</div>
+      <div id="save_search_filter_summary" style="background:#f7f8f5;border-radius:6px;padding:10px 12px;font-size:0.8rem;color:#444;margin-bottom:14px;line-height:1.45;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" onclick="closeSaveSearchModal()" style="background:white;color:#666;border:1px solid #ccd5cc;padding:9px 16px;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>
+        <button type="submit" style="background:#2d6a4f;color:white;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;font-weight:600;">Save snapshot</button>
+      </div>
+      <div id="save_search_status" style="margin-top:10px;font-size:0.85rem;display:none;"></div>
+    </form>
+  </div>
+</div>
+
+<!-- MC-322: Toast for "Saved" confirmation -->
+<div id="mc322_toast" style="display:none;position:fixed;bottom:24px;right:24px;background:#1f4a36;color:white;padding:12px 18px;border-radius:8px;font-size:0.9rem;font-weight:600;z-index:1300;box-shadow:0 6px 18px rgba(0,0,0,0.25);">✓ Saved!</div>
+
 <script>
 let allDeals = [];
 let currentSort = 'score';
@@ -625,6 +684,13 @@ let lastCommuteDest = null;   // Track last computed destination
 let commuteTimesCache = {};   // neighbourhood → {commute_minutes, walk_dist_km, source}
 let shortlistStatus = {};    // listing_id → bool (is saved)
 let userEmail = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email') || null;
+
+// MC-319: Server-side pagination state for /api/deals
+const PAGE_SIZE = 50;            // matches server default
+let currentOffset = 0;           // how many rows have been loaded across pages
+let currentTotal = 0;            // total filtered deal count from server
+let currentHasMore = false;      // true while more pages exist
+let paginationInitialized = false; // defer Load-more wiring until DOM ready
 
 // MC-263: Alert subscription form
 document.getElementById('alert_form').addEventListener('submit', async function(e) {
@@ -684,7 +750,183 @@ function parseQueryParams() {
     document.getElementById('hide_stale').checked = true;
     document.getElementById('hide_stale_toggle').classList.add('active');
   }
+  // MC-323: round-trip is_new from URL into the Only NEW toggle so refresh
+  // and share-link flows keep the filter active.
+  if (params.get('is_new') === 'true') {
+    document.getElementById('only_new').checked = true;
+    document.getElementById('only_new_toggle').classList.add('active');
+  }
   updateFilterCount();
+}
+
+// MC-322: round-trip helper — re-apply a saved filter snapshot to the bar.
+// Accepts an object with the same keys as buildParams() and tries the same
+// write paths as parseQueryParams() so Save → Load is symmetric.
+function applySavedFilters(filters) {
+  if (!filters || typeof filters !== 'object') return false;
+  const setIfPresent = (id, val) => { if (val !== '' && val != null) document.getElementById(id).value = val; };
+  setIfPresent('beds_min', filters.beds_min);
+  setIfPresent('baths_min', filters.baths_min);
+  setIfPresent('price_min', filters.price_min);
+  setIfPresent('price_max', filters.price_max);
+  setIfPresent('neighbourhood', filters.neighbourhood);
+  setIfPresent('region', filters.region);
+  setIfPresent('source', filters.source);
+  setIfPresent('sort_by', filters.sort);  // saved key is 'sort', select id is 'sort_by'
+  setIfPresent('commute_dest', filters.commute_dest);
+  setIfPresent('max_commute', filters.max_commute);
+  setIfPresent('max_subway', filters.max_subway);
+  if (filters.has_parking === 'true' || filters.has_parking === true) {
+    document.getElementById('has_parking').checked = true;
+    document.getElementById('parking_toggle').classList.add('active');
+  }
+  if (filters.sort && filters.sort !== 'score') {
+    document.getElementById('sort_by').value = filters.sort;
+    currentSort = filters.sort;
+  }
+  if (filters.hide_stale === 'true' || filters.hide_stale === true) {
+    document.getElementById('hide_stale').checked = true;
+    document.getElementById('hide_stale_toggle').classList.add('active');
+  }
+  // MC-323: saved-searches Load parity for the Only NEW toggle.
+  if (filters.is_new === 'true' || filters.is_new === true) {
+    document.getElementById('only_new').checked = true;
+    document.getElementById('only_new_toggle').classList.add('active');
+  }
+  updateFilterCount();
+  return true;
+}
+
+// MC-322: Save-search modal helpers. Capture current filter bar state
+// (same shape as buildParams() but as a plain object), POST to
+// /api/saved-searches, then show a toast and dismiss.
+function getCurrentFilterStateAsObject() {
+  const params = buildParams();
+  const out = {};
+  for (const [k, v] of params.entries()) out[k] = v;
+  // Round-trip parity: also include the raw "sort=score" default so reloads
+  // are deterministic, and the boolean toggles so they survive a Load.
+  out.hide_stale = document.getElementById('hide_stale').checked ? 'true' : '';
+  out.has_parking = document.getElementById('has_parking').checked ? 'true' : '';
+  // MC-323: include Only NEW state in saved-search snapshots so users who
+  // save a "today's new deals" filter combo reload it correctly later.
+  out.is_new = document.getElementById('only_new').checked ? 'true' : '';
+  return out;
+}
+
+function describeFilters(filters) {
+  const parts = [];
+  if (filters.beds_min) parts.push(`${filters.beds_min}+ beds`);
+  if (filters.baths_min) parts.push(`${filters.baths_min}+ baths`);
+  if (filters.price_min || filters.price_max) {
+    const lo = filters.price_min ? `$${filters.price_min}` : '$0';
+    const hi = filters.price_max ? `$${filters.price_max}` : '∞';
+    parts.push(`${lo}–${hi}`);
+  }
+  if (filters.region) parts.push(`Region: ${filters.region}`);
+  if (filters.neighbourhood) parts.push(`Neighbourhood: ${filters.neighbourhood}`);
+  if (filters.source) parts.push(`Source: ${filters.source}`);
+  if (filters.sort && filters.sort !== 'score') parts.push(`Sort: ${filters.sort}`);
+  if (filters.hide_stale === 'true') parts.push(`Hide stale`);
+  if (filters.has_parking === 'true') parts.push(`Parking required`);
+  // MC-323: surface the Only NEW filter in the save-search summary so users
+  // see what the snapshot will reload.
+  if (filters.is_new === 'true') parts.push(`Only NEW (6h)`);
+  if (filters.commute_dest) parts.push(`→ ${filters.commute_dest}`);
+  if (filters.max_commute) parts.push(`Commute ≤ ${filters.max_commute}m`);
+  if (filters.max_subway) parts.push(`Subway ≤ ${filters.max_subway}m`);
+  return parts.length ? parts.join(' · ') : 'No filters set — saving as "all listings".';
+}
+
+function openSaveSearchModal() {
+  const modal = document.getElementById('save_search_modal');
+  const summary = document.getElementById('save_search_filter_summary');
+  const state = getCurrentFilterStateAsObject();
+  summary.textContent = describeFilters(state);
+  // Pre-fill email if we have one stored from a previous save
+  const stored = (localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email') || '').trim();
+  const emailInput = document.getElementById('save_search_email');
+  emailInput.value = stored;
+  const hint = document.getElementById('save_search_email_hint');
+  hint.style.display = stored ? 'block' : 'none';
+  // Hide any prior status message
+  const status = document.getElementById('save_search_status');
+  status.style.display = 'none';
+  status.textContent = '';
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('save_search_name').focus(), 50);
+}
+
+function closeSaveSearchModal() {
+  document.getElementById('save_search_modal').style.display = 'none';
+}
+
+async function submitSaveSearch() {
+  const name = document.getElementById('save_search_name').value.trim();
+  const email = document.getElementById('save_search_email').value.trim();
+  const status = document.getElementById('save_search_status');
+  if (!name) { status.textContent = 'Please enter a name.'; status.style.color = '#c1452d'; status.style.display = 'block'; return; }
+  if (!email || !email.includes('@')) { status.textContent = 'Please enter a valid email.'; status.style.color = '#c1452d'; status.style.display = 'block'; return; }
+  const filters = getCurrentFilterStateAsObject();
+  status.textContent = 'Saving…'; status.style.color = '#555'; status.style.display = 'block';
+  try {
+    const res = await fetch('/api/saved-searches', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        email: email, name: name,
+        // Forward a small subset as legacy columns for back-compat (search_id matching)
+        beds_min: filters.beds_min, baths_min: filters.baths_min,
+        price_min: filters.price_min, price_max: filters.price_max,
+        neighbourhood: filters.neighbourhood, region: filters.region,
+        commute_dest: filters.commute_dest, max_commute: filters.max_commute,
+        filters_json: filters,
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      status.textContent = data.error || 'Save failed'; status.style.color = '#c1452d'; status.style.display = 'block';
+      return;
+    }
+    // Persist email for next time (matches alerts.html convention)
+    try { localStorage.setItem('rent_alert_email', email); } catch (e) {}
+    try { sessionStorage.setItem('rent_alert_email', email); } catch (e) {}
+    userEmail = email;
+    status.textContent = `Saved! (#${data.search_id})`; status.style.color = '#1e5b32'; status.style.display = 'block';
+    showMc322Toast();
+    setTimeout(closeSaveSearchModal, 700);
+  } catch (err) {
+    status.textContent = `Network error: ${err.message}`; status.style.color = '#c1452d'; status.style.display = 'block';
+  }
+}
+
+function showMc322Toast() {
+  const t = document.getElementById('mc322_toast');
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, 2400);
+}
+
+// MC-322: Auto-load. If the URL has recognized filter keys AND no `preselect`
+// param, just leave parseQueryParams() to do its thing. But if it ALSO has
+// `preselect=<id>`, fetch the canonical saved search and apply that snapshot
+// (overrides any URL params) so renames + future fields always win.
+async function maybeLoadFromPreselect() {
+  const params = new URLSearchParams(window.location.search);
+  const preselect = params.get('preselect');
+  if (!preselect) return false;
+  const email = (localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email') || '').trim();
+  if (!email) return false;
+  try {
+    const res = await fetch(`/api/saved-searches/load?email=${encodeURIComponent(email)}&id=${encodeURIComponent(preselect)}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data.success || !data.search) return false;
+    applySavedFilters(data.search.filters_dict || {});
+    loadDeals();
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function buildParams() {
@@ -699,6 +941,7 @@ function buildParams() {
   const source = document.getElementById('source').value;
   const sortBy = document.getElementById('sort_by').value;
   const hideStale = document.getElementById('hide_stale').checked;
+  const onlyNew = document.getElementById('only_new').checked;
 
   if (bedsMin) params.set('beds_min', bedsMin);
   if (bathsMin) params.set('baths_min', bathsMin);
@@ -710,6 +953,8 @@ function buildParams() {
   if (source) params.set('source', source);
   if (sortBy !== 'score') params.set('sort', sortBy);
   if (hideStale) params.set('hide_stale', 'true');
+  // MC-323: Only NEW (6h) filter — round-trip with parseQueryParams/applySavedFilters.
+  if (onlyNew) params.set('is_new', 'true');
 
   const commuteDest = document.getElementById('commute_dest').value.trim();
   const maxCommute = document.getElementById('max_commute').value;
@@ -735,6 +980,8 @@ function updateFilterCount() {
   if (document.getElementById('max_commute').value) count++;
   if (document.getElementById('max_subway').value) count++;
   if (document.getElementById('source').value) count++;
+  // MC-323: Only NEW toggle counts as one active filter when checked.
+  if (document.getElementById('only_new').checked) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -757,6 +1004,9 @@ function resetFilters() {
   document.getElementById('sort_by').selectedIndex = 0;
   document.getElementById('hide_stale').checked = false;
   document.getElementById('hide_stale_toggle').classList.remove('active');
+  // MC-323: clear the Only NEW toggle along with all other filters
+  document.getElementById('only_new').checked = false;
+  document.getElementById('only_new_toggle').classList.remove('active');
   document.getElementById('commute_dest').value = '';
   document.getElementById('max_commute').value = '';
   document.getElementById('max_subway').value = '';
@@ -778,9 +1028,17 @@ async function loadDeals() {
   document.getElementById('no_deals').style.display = 'none';
   document.getElementById('deals_table').style.display = 'none';
 
+  // MC-319: Reset pagination state for a fresh server fetch (filter changed)
+  currentOffset = 0;
+
   try {
     const res = await fetch('/api/deals?' + params.toString());
-    allDeals = await res.json();
+    const payload = await res.json();
+    // MC-319: server now returns {deals, total, limit, offset, has_more}
+    const pageDeals = Array.isArray(payload) ? payload : (payload.deals || []);
+    currentTotal = (typeof payload === 'object' && payload && 'total' in payload) ? payload.total : pageDeals.length;
+    currentHasMore = !!(payload && payload.has_more);
+    allDeals = pageDeals;
 
     // MC-271: Hydrate is_saved on each deal from shortlistStatus
     if (userEmail) {
@@ -839,9 +1097,90 @@ async function loadDeals() {
       commuteTimesCache = {};
     }
 
-    renderDeals(allDeals);
+    currentOffset = allDeals.length; // first page size = total loaded so far
+    renderDeals(allDeals, { total: currentTotal, loaded: allDeals.length, hasMore: currentHasMore });
   } catch(e) {
     document.getElementById('loading').textContent = 'Error: ' + e.message;
+  }
+}
+
+// MC-319: Fetch the next page of deals and append to the table.
+// Refetches with current filters + ?offset=currentOffset and the server-defined PAGE_SIZE.
+async function loadMoreDeals() {
+  const btn = document.getElementById('load_more_btn');
+  if (!btn || btn.disabled) return;
+
+  const params = buildParams();
+  params.set('offset', String(currentOffset));
+  params.set('limit', String(PAGE_SIZE));
+
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Loading…';
+
+  try {
+    const res = await fetch('/api/deals?' + params.toString());
+    const payload = await res.json();
+    const pageDeals = Array.isArray(payload) ? payload : (payload.deals || []);
+    currentTotal = (payload && typeof payload === 'object' && 'total' in payload) ? payload.total : (currentTotal + pageDeals.length);
+    currentHasMore = !!(payload && payload.has_more);
+
+    // Hydrate is_saved + commute enrichment for the new rows only.
+    let newRows = pageDeals;
+    if (userEmail) {
+      newRows = newRows.map(d => ({...d, is_saved: !!shortlistStatus[d.listing_id]}));
+    }
+    const commuteDest = document.getElementById('commute_dest').value.trim();
+    if (commuteDest && Object.keys(commuteTimesCache).length > 0) {
+      newRows = newRows.map(d => {
+        const entry = commuteTimesCache[d.neighbourhood || ''];
+        if (entry && entry.commute_minutes != null) {
+          return {...d, commute_minutes: entry.commute_minutes};
+        }
+        return d;
+      });
+    }
+
+    appendDealRows(newRows);
+    allDeals = allDeals.concat(newRows);
+    currentOffset += newRows.length;
+
+    renderLoadMore(); // refresh footer state based on new totals
+  } catch(e) {
+    console.warn('Load more failed:', e);
+    btn.textContent = '✗ failed — click to retry';
+  } finally {
+    if (btn) btn.disabled = !currentHasMore;
+    if (currentHasMore && btn && btn.textContent === 'Loading…') {
+      btn.textContent = originalText;
+    }
+  }
+}
+
+// MC-319: Toggle visibility/state of the Load more button based on pagination state.
+function renderLoadMore() {
+  const btn = document.getElementById('load_more_btn');
+  const status = document.getElementById('pagination_status');
+  if (!btn || !status) return;
+
+  // Status text shows "Showing X of Y" so users see how many they've loaded vs total.
+  if (currentTotal > 0) {
+    status.textContent = `Showing ${currentOffset} of ${currentTotal} deals`;
+  } else {
+    status.textContent = '';
+  }
+
+  if (currentHasMore && currentOffset < currentTotal) {
+    btn.style.display = 'inline-block';
+    btn.disabled = false;
+    const remaining = currentTotal - currentOffset;
+    btn.textContent = `Load more (${remaining} remaining)`;
+  } else {
+    btn.style.display = 'none';
+    btn.disabled = true;
+    if (currentTotal > 0 && currentOffset >= currentTotal) {
+      status.textContent = `Showing all ${currentTotal} deals`;
+    }
   }
 }
 
@@ -853,17 +1192,23 @@ function pctClass(pct) {
   return 'pct-bad';
 }
 
-function renderDeals(deals) {
+function renderDeals(deals, pagination) {
   document.getElementById('loading').style.display = 'none';
   if (!deals || deals.length === 0) {
     document.getElementById('no_deals').style.display = 'block';
     document.getElementById('total_count').textContent = '0';
     document.getElementById('avg_under').textContent = '—';
     document.getElementById('best_deal').textContent = '—';
+    // MC-319: hide Load more when there's nothing to show
+    const moreBtn = document.getElementById('load_more_btn');
+    if (moreBtn) moreBtn.style.display = 'none';
+    currentHasMore = false;
     return;
   }
 
-  document.getElementById('total_count').textContent = deals.length;
+  // MC-319: Show the true filtered total, not just the loaded page size
+  const total = (pagination && typeof pagination.total === 'number') ? pagination.total : deals.length;
+  document.getElementById('total_count').textContent = String(total);
   const pcts = deals.map(d => parseFloat(d.pct_under)).filter(n => !isNaN(n));
   const avg = pcts.length ? (pcts.reduce((a,b)=>a+b,0)/pcts.length).toFixed(1) : '—';
   document.getElementById('avg_under').textContent = avg !== '—' ? avg + '%' : '—';
@@ -873,6 +1218,23 @@ function renderDeals(deals) {
   const tbody = document.getElementById('deals_body');
   tbody.innerHTML = '';
   deals.forEach((d, i) => {
+    tbody.insertRow(-1).innerHTML = makeRowHtml(d);
+  });
+
+  document.getElementById('deals_table').style.display = 'table';
+  // MC-282: Load price trend badges after table renders
+  loadPriceTrends();
+  // MC-309: Lazy-load Craigslist photos in the thumbnail column via IntersectionObserver.
+  if (window.__clPhotoLazy && typeof window.__clPhotoLazy.setupCLPhotoLazyLoad === 'function') {
+    window.__clPhotoLazy.setupCLPhotoLazyLoad();
+  }
+  // MC-319: Initialise Load-more button visibility
+  renderLoadMore();
+}
+
+// MC-319: Build the HTML string for a single deal row. Shared by renderDeals (first page)
+// and appendDealRows (subsequent pages) so the row layout stays identical.
+function makeRowHtml(d) {
     const pct = d.pct_under_fmt || '—';
     const pctCls = pctClass(pct);
     const link = d.link || '#';
@@ -959,7 +1321,7 @@ function renderDeals(deals) {
         }
         return '<div class="deal-thumb-fallback">🏠</div>';
       })()}</td>
-      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${srcTag}</td>
+      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${srcTag}${d.neighborhood_slug ? ` <a href="/neighborhood/${encodeURIComponent(d.neighborhood_slug)}" target="_blank" rel="noopener" class="nbhd-stats-link" title="View neighbourhood stats in a new tab">📊</a>` : ''}</td>
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
       <td>${baths}</td>
@@ -975,16 +1337,26 @@ function renderDeals(deals) {
       <td><button class="star-btn" data-id="${d.listing_id}" data-saved="${d.is_saved ? '1' : '0'}" onclick="toggleShortlist(this)" title="Save to shortlist">${d.is_saved ? '★' : '☆'}</button></td>
       <td><a href="${link}" target="_blank" class="link-btn">View</a></td>
     </tr>`;
-    tbody.insertRow(-1).innerHTML = row;
-  });
+    return row;
+}
 
-  document.getElementById('deals_table').style.display = 'table';
-  // MC-282: Load price trend badges after table renders
-  loadPriceTrends();
-  // MC-309: Lazy-load Craigslist photos in the thumbnail column via IntersectionObserver.
+// MC-319: Append additional rows to the existing table without scroll jump.
+// Resets the scroll position so the user sees the freshly-loaded rows.
+function appendDealRows(deals) {
+  if (!deals || deals.length === 0) return;
+  const tbody = document.getElementById('deals_body');
+  const scrollPos = window.scrollY;
+  const lastRow = tbody.lastElementChild ? tbody.lastElementChild.offsetTop : 0;
+  deals.forEach((d) => {
+    tbody.insertRow(-1).innerHTML = makeRowHtml(d);
+  });
+  // MC-309: re-arm intersection observer for any new CL lazy thumbnails.
   if (window.__clPhotoLazy && typeof window.__clPhotoLazy.setupCLPhotoLazyLoad === 'function') {
     window.__clPhotoLazy.setupCLPhotoLazyLoad();
   }
+  // Scroll user to the start of the newly-loaded batch.
+  window.scrollTo({ top: lastRow, behavior: 'smooth' });
+  // Update the loaded-count suffix in total_count when paginating further.
 }
 
 // MC-282: Fetch batch price trends and stamp badges on table rows
@@ -1021,8 +1393,14 @@ document.getElementById('hide_stale').addEventListener('change', function() {
   updateFilterCount();
 });
 
+// MC-323: Only NEW toggle styling — mirrors the hide_stale pattern.
+document.getElementById('only_new').addEventListener('change', function() {
+  document.getElementById('only_new_toggle').classList.toggle('active', this.checked);
+  updateFilterCount();
+});
+
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region', 'source', 'max_subway'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
@@ -1032,7 +1410,25 @@ parseQueryParams();
 loadProfilePreferences();
 loadShortlistStatus();
 loadSimilarShortlist();  // MC-274: "You might also like" for users with shortlisted listings
+loadNewCountBadge();     // MC-323: populate the "(N new)" hint next to the Only NEW toggle
 loadDeals();
+
+// MC-323: Fetch /api/meta.new_count and render "(N new)" next to the Only NEW
+// toggle label. Fails silently (just leaves the placeholder) so a broken
+// meta endpoint doesn't break page init.
+async function loadNewCountBadge() {
+  const el = document.getElementById('only_new_count');
+  if (!el) return;
+  try {
+    const resp = await fetch('/api/meta');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const n = (data && typeof data.new_count === 'number') ? data.new_count : 0;
+    el.textContent = '(' + n + ' new)';
+  } catch(e) {
+    el.textContent = '—';
+  }
+}
 
 // ── MC-273: Profile preferences ───────────────────────────────────────────────
 async function loadProfilePreferences() {

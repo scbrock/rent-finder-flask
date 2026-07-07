@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Saved Searches — Toronto Rent Deals</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f7f8f5;
+      margin: 0;
+      padding: 0;
+      color: #2d3a2d;
+    }
+    .container { max-width: 980px; margin: 0 auto; padding: 22px 18px 56px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+    h1 { margin: 0 0 6px; font-size: 1.6rem; color: #1f3a25; }
+    .subtitle { color: #666; margin: 0 0 0; font-size: 0.95rem; }
+    .back-link { color: #2d6a4f; text-decoration: none; font-size: 0.85rem; font-weight: 600; white-space: nowrap; margin-top: 6px; }
+    .back-link:hover { text-decoration: underline; }
+    .nav { display: flex; gap: 14px; font-size: 0.85rem; }
+    .nav a { color: #2d6a4f; text-decoration: none; font-weight: 600; }
+    .nav a:hover { text-decoration: underline; }
+    .email-bar { background: white; border-radius: 10px; padding: 18px; margin-bottom: 20px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .email-bar label { display: block; font-size: 0.8rem; font-weight: 700; color: #555; margin-bottom: 4px; }
+    .email-bar input[type=email] { padding: 8px 12px; border: 1px solid #ccd5cc; border-radius: 6px; font-size: 0.95rem; min-width: 240px; }
+    .email-bar button { background: #2d6a4f; color: white; border: none; padding: 9px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .email-bar button.secondary { background: white; color: #2d6a4f; border: 1px solid #2d6a4f; }
+    .email-bar .current-email { font-size: 0.85rem; color: #555; }
+    .empty-state { background: white; border-radius: 10px; padding: 36px 24px; text-align: center; color: #666; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .empty-state h2 { margin: 0 0 8px; color: #2d3a2d; font-size: 1.15rem; }
+    .empty-state p { margin: 0 0 16px; }
+    .search-card { background: white; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border-left: 4px solid #2d6a4f; }
+    .search-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
+    .search-name { font-size: 1.05rem; font-weight: 700; color: #1f3a25; margin-bottom: 4px; }
+    .match-count-badge { background: #c3f0ca; color: #1f5a32; padding: 4px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
+    .match-count-badge.no-matches { background: #f0f0f0; color: #666; }
+    .filter-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+    .filter-tag { background: #eef3ee; color: #2d3a2d; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; }
+    .filter-tag.has-parking { background: #fff3cd; color: #8a6914; }
+    .filter-tag.source-tag { background: #e0f0ff; color: #1e5b94; font-weight: 600; }
+    /* MC-323: highlight the Only NEW tag so users can spot freshness-only
+       saved searches at a glance. Mirrors the ✨ green used in the deals
+       table and the Only NEW toggle button. */
+    .filter-tag.only-new-tag { background: #c3f0ca; color: #0d5c26; font-weight: 600; }
+    .search-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.8rem; color: #666; margin: 6px 0 10px; }
+    .search-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn { padding: 7px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-weight: 600; font-size: 0.85rem; }
+    .btn-primary { background: #2d6a4f; color: white; border-color: #2d6a4f; }
+    .btn-primary:hover { background: #1f4a36; }
+    .btn-secondary { background: white; color: #2d6a4f; border-color: #2d6a4f; }
+    .btn-secondary:hover { background: #f1f7f3; }
+    .btn-danger { background: white; color: #c1452d; border-color: #c1452d; }
+    .btn-danger:hover { background: #fdf2ef; }
+    .msg { padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 0.9rem; font-weight: 600; }
+    .msg-success { background: #d4edda; color: #1e5b32; }
+    .msg-error { background: #f8d7da; color: #8b2733; }
+    .rename-form { display: none; margin-top: 8px; gap: 6px; }
+    .rename-form input { flex: 1; padding: 6px 10px; border: 1px solid #ccd5cc; border-radius: 6px; }
+    .rename-form.open { display: flex; }
+    .filter-summary { font-size: 0.78rem; color: #777; margin-top: 6px; }
+    .filter-summary code { background: #f1f4f1; padding: 1px 4px; border-radius: 3px; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>🔖 Saved Searches</h1>
+      <p class="subtitle">Snapshot your filter combos and reload them with one click.</p>
+    </div>
+    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+      <a href="/" class="back-link">← Back to deals</a>
+      <nav class="nav">
+        <a href="/alerts">⚙️ Alerts</a>
+        <a href="/shortlist">⭐ Shortlist</a>
+        <a href="/profile">👤 Profile</a>
+      </nav>
+    </div>
+  </header>
+
+  <div id="msg-area"></div>
+
+  <div class="email-bar">
+    <div style="flex:1; min-width:240px;">
+      <label for="email-input">Your email</label>
+      <input type="email" id="email-input" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <button class="primary" id="load-btn" onclick="loadSearches()">Show saved searches</button>
+    <span id="current-email-display" class="current-email" style="display:none;"></span>
+  </div>
+
+  <div id="searches-list"></div>
+
+  <template id="search-card-tpl">
+    <div class="search-card" data-search-id="">
+      <div class="search-card-header">
+        <div style="flex:1;">
+          <div class="search-name"></div>
+          <div class="filter-tags"></div>
+        </div>
+        <span class="match-count-badge no-matches">0 matches</span>
+      </div>
+      <div class="search-meta">
+        <span><strong>Created:</strong> <span class="meta-created"></span></span>
+        <span><strong>Last checked:</strong> <span class="meta-checked">Never</span></span>
+      </div>
+      <div class="filter-summary"></div>
+      <div class="search-actions">
+        <button class="btn btn-primary" data-act="load">↻ Load filters</button>
+        <button class="btn btn-secondary" data-act="rename">✏️ Rename</button>
+        <button class="btn btn-danger" data-act="delete">🗑 Delete</button>
+      </div>
+      <form class="rename-form" data-role="rename-form">
+        <input type="text" data-role="rename-input" maxlength="80" required>
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-secondary" data-act="cancel-rename">Cancel</button>
+      </form>
+    </div>
+  </template>
+</div>
+
+<script>
+const API = ''; // same origin
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function msg(type, text) {
+  const area = document.getElementById('msg-area');
+  area.innerHTML = `<div class="msg msg-${type}">${escapeHtml(text)}</div>`;
+  if (type === 'success') setTimeout(() => { area.innerHTML = ''; }, 4000);
+}
+
+function getEmail() {
+  const input = document.getElementById('email-input').value.trim();
+  if (input) return input;
+  // fallback to URL ?email=
+  return new URLSearchParams(window.location.search).get('email') || '';
+}
+
+function setEmail(addr) {
+  document.getElementById('email-input').value = addr;
+  const disp = document.getElementById('current-email-display');
+  disp.textContent = `Showing searches for ${addr}`;
+  disp.style.display = 'inline';
+}
+
+async function loadSearches() {
+  const email = getEmail();
+  if (!email || !email.includes('@')) {
+    msg('error', 'Please enter a valid email address.');
+    return;
+  }
+  setEmail(email);
+  const res = await fetch(`${API}/api/saved-searches?email=${encodeURIComponent(email)}`);
+  const data = await res.json();
+  if (data.error) {
+    msg('error', data.error);
+    return;
+  }
+  const list = data.searches || [];
+  const wrap = document.getElementById('searches-list');
+  if (!list.length) {
+    wrap.innerHTML = `<div class="empty-state">
+      <h2>No saved searches yet</h2>
+      <p>Head back to the <a href="/">deals page</a>, set some filters, then click 🔖 Save current filters.</p>
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = '';
+  for (const s of list) {
+    wrap.appendChild(buildCard(s));
+  }
+}
+
+function buildCard(s) {
+  const tpl = document.getElementById('search-card-tpl').content.firstElementChild.cloneNode(true);
+  tpl.dataset.searchId = s.search_id;
+  tpl.querySelector('.search-name').textContent = s.name;
+  const countBadge = tpl.querySelector('.match-count-badge');
+  const count = (s.match_count == null) ? 0 : s.match_count;
+  countBadge.textContent = `${count} match${count === 1 ? '' : 'es'}`;
+  countBadge.classList.toggle('no-matches', count === 0);
+
+  // Filter tags
+  const tagsEl = tpl.querySelector('.filter-tags');
+  tagsEl.innerHTML = '';
+  const tags = [];
+  const fd = s.filters_dict || {};
+  const fdHas = (k) => fd && Object.prototype.hasOwnProperty.call(fd, k) && fd[k] !== '' && fd[k] != null;
+  if (s.beds_min != null) tags.push(`Min ${Math.floor(s.beds_min)}BR`);
+  if (s.beds_max != null) tags.push(`Max ${Math.floor(s.beds_max)}BR`);
+  if (s.baths_min != null) tags.push(`${s.baths_min}+ baths`);
+  if (s.region) tags.push(escapeHtml(s.region));
+  if (s.neighbourhood) tags.push(escapeHtml(s.neighbourhood));
+  if (s.price_min != null) tags.push(`$${Math.floor(s.price_min)}+`);
+  if (s.price_max != null) tags.push(`<$${Math.floor(s.price_max)}`);
+  if (fdHas('source')) tags.push(`<span class="filter-tag source-tag">Source: ${escapeHtml(fd.source)}</span>`);
+  if (fdHas('has_parking')) tags.push(`<span class="filter-tag has-parking">🅿️ Parking</span>`);
+  if (fdHas('sort')) tags.push(`Sort: ${escapeHtml(fd.sort)}`);
+  if (fdHas('max_subway')) tags.push(`Subway ≤ ${escapeHtml(fd.max_subway)}m`);
+  if (fdHas('hide_stale')) tags.push(`Hide stale`);
+  // MC-323: surface the Only NEW toggle in saved-searches summary tags
+  // for visual parity with the save-search modal summary.
+  if (fdHas('is_new') && fd.is_new === 'true') tags.push(`<span class="filter-tag only-new-tag">✨ Only NEW (6h)</span>`);
+  if (fdHas('commute_dest')) tags.push(`→ ${escapeHtml(fd.commute_dest)}`);
+  if (fdHas('max_commute')) tags.push(`Commute ≤ ${escapeHtml(fd.max_commute)}m`);
+  if (!tags.length) tags.push('No filters (all listings)');
+  for (const t of tags) {
+    if (t.startsWith('<span')) {
+      const wrap = document.createElement('span');
+      wrap.innerHTML = t;
+      tagsEl.appendChild(wrap.firstChild);
+    } else {
+      const span = document.createElement('span');
+      span.className = 'filter-tag';
+      span.textContent = t;
+      tagsEl.appendChild(span);
+    }
+  }
+
+  // Meta
+  tpl.querySelector('.meta-created').textContent = s.created_at
+    ? new Date(s.created_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })
+    : '—';
+  tpl.querySelector('.meta-checked').textContent = s.last_checked
+    ? new Date(s.last_checked).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })
+    : 'Never';
+
+  // Filter summary (raw JSON keys, collapsed if many)
+  const fdKeys = Object.keys(fd || {});
+  if (fdKeys.length) {
+    const summary = tpl.querySelector('.filter-summary');
+    summary.innerHTML = `Snapshot: <code>${escapeHtml(JSON.stringify(fd))}</code>`;
+  }
+
+  // Wire actions
+  tpl.querySelector('[data-act=load]').addEventListener('click', () => loadSearch(s));
+  tpl.querySelector('[data-act=delete]').addEventListener('click', () => deleteSearch(s.search_id, s.name));
+  tpl.querySelector('[data-act=rename]').addEventListener('click', () => openRename(tpl));
+  tpl.querySelector('[data-act=cancel-rename]').addEventListener('click', () => closeRename(tpl));
+  tpl.querySelector('[data-role=rename-form]').addEventListener('submit', (ev) => submitRename(ev, s, tpl));
+  return tpl;
+}
+
+function openRename(tpl) {
+  tpl.querySelector('[data-role=rename-form]').classList.add('open');
+  const input = tpl.querySelector('[data-role=rename-input]');
+  input.value = tpl.querySelector('.search-name').textContent;
+  input.focus();
+}
+function closeRename(tpl) {
+  tpl.querySelector('[data-role=rename-form]').classList.remove('open');
+}
+
+async function loadSearch(s) {
+  // Use the new /api/saved-searches/load endpoint so we always get the
+  // current filters_dict (handles renamed searches + future fields).
+  const email = getEmail();
+  const res = await fetch(`${API}/api/saved-searches/load?email=${encodeURIComponent(email)}&id=${s.search_id}`);
+  const data = await res.json();
+  if (data.error || !data.success) {
+    msg('error', data.error || 'Failed to load search');
+    return;
+  }
+  const filters = data.search.filters_dict || {};
+  // Build a URL like /?beds_min=1&price_max=2500&source=kijiji
+  const qs = new URLSearchParams();
+  // Snapshot keys win; legacy columns only fill in when snapshot is missing the key
+  const keys = ['beds_min','beds_max','baths_min','price_min','price_max','has_parking',
+                'neighbourhood','region','source','sort','hide_stale','commute_dest',
+                'max_commute','max_subway'];
+  for (const k of keys) {
+    if (filters && Object.prototype.hasOwnProperty.call(filters, k) && filters[k] !== '' && filters[k] != null) {
+      qs.set(k, String(filters[k]));
+    }
+  }
+  qs.set('preselect', s.search_id);  // optional: hint index.html to highlight
+  window.location.href = `/${qs.toString() ? '?' + qs.toString() : ''}`;
+}
+
+async function deleteSearch(id, name) {
+  if (!confirm(`Delete saved search "${name}"?`)) return;
+  const email = getEmail();
+  const res = await fetch(`${API}/api/saved-searches/${id}?email=${encodeURIComponent(email)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) {
+    msg('error', data.error || 'Delete failed');
+    return;
+  }
+  msg('success', `Deleted "${name}"`);
+  loadSearches();
+}
+
+async function submitRename(ev, s, tpl) {
+  ev.preventDefault();
+  const newName = tpl.querySelector('[data-role=rename-input]').value.trim();
+  if (!newName || newName === s.name) {
+    closeRename(tpl);
+    return;
+  }
+  const email = getEmail();
+  const body = {
+    name: newName,
+    beds_min: s.beds_min, beds_max: s.beds_max, baths_min: s.baths_min,
+    price_min: s.price_min, price_max: s.price_max,
+    neighbourhood: s.neighbourhood, region: s.region,
+    min_score: s.min_score, max_commute: s.max_commute, commute_dest: s.commute_dest,
+    filters_json: s.filters_json || '{}',
+  };
+  const res = await fetch(`${API}/api/saved-searches/${s.search_id}?email=${encodeURIComponent(email)}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    msg('error', data.error || 'Rename failed');
+    return;
+  }
+  msg('success', `Renamed to "${newName}"`);
+  loadSearches();
+}
+
+// Initial load: if ?email= in URL, auto-show
+window.addEventListener('DOMContentLoaded', () => {
+  const urlEmail = new URLSearchParams(window.location.search).get('email');
+  if (urlEmail) {
+    document.getElementById('email-input').value = urlEmail;
+    loadSearches();
+  }
+});
+</script>
+</body>
+</html>

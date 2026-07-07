@@ -4,7 +4,7 @@ MC-262: Serves deals from SQLite (listings.db) with browsable, filterable UI.
 MC-267/268/270: POI proximity — grocery, gym, TTC via Overpass + ORS.
 """
 
-import os, sys, json, time, hashlib, math
+import os, sys, json, time, hashlib, math, re
 from flask import Flask, render_template, jsonify, request
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +56,172 @@ def _days_ago_class(days_ago: int) -> str:
     if days_ago <= 14:
         return 'age-medium'
     return 'age-stale'
+
+
+# ---------------------------------------------------------------------------
+# MC-321: Neighborhood stats helpers (slugify, aggregation, lookup)
+# ---------------------------------------------------------------------------
+
+_SLUG_STRIP_RE = re.compile(r'[^a-z0-9]+')
+
+
+def _slugify(name: str) -> str:
+    """Lowercase, hyphenate, strip leading/trailing hyphens. ASCII-only.
+
+    "Bay Street Corridor" -> "bay-street-corridor"
+    "Niagara (St. Lawrence)" -> "niagara-st-lawrence"
+    "" -> ""
+    """
+    if not name:
+        return ''
+    s = str(name).strip().lower()
+    s = _SLUG_STRIP_RE.sub('-', s).strip('-')
+    return s
+
+
+def _safe_float(v):
+    """Return float(v) or None if v is empty/None/non-numeric."""
+    if v is None or v == '' or v == 'None' or (isinstance(v, float) and math.isnan(v)):
+        return None
+    try:
+        f = float(v)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
+def _median(values):
+    """Return median of a non-empty list of numbers; None for empty input."""
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    if n % 2:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _neighborhood_stats(deals, name: str) -> dict | None:
+    """Compute aggregate stats for a single neighborhood.
+
+    Returns None if no active listings match `name` (case-insensitive).
+    The returned dict has the MC-321 AC-1 shape:
+        neighborhood, slug, count, median_price, median_price_per_sqft,
+        min_price, max_price, beds_breakdown, top_deals
+    """
+    if not name:
+        return None
+    needle = name.strip().lower()
+    listings = [
+        d for d in deals
+        if (d.get('neighbourhood') or '').strip().lower() == needle
+    ]
+    if not listings:
+        return None
+
+    prices = sorted([d['price'] for d in listings if d.get('price')])
+    sqft_prices = []
+    for d in listings:
+        sqft = _safe_float(d.get('sqft'))
+        price = _safe_float(d.get('price'))
+        if sqft and sqft > 0 and price:
+            sqft_prices.append(price / sqft)
+
+    beds_breakdown: dict = {}
+    for d in listings:
+        b = d.get('beds')
+        if b is None or b == '':
+            continue
+        try:
+            key = int(float(b))
+        except (TypeError, ValueError):
+            continue
+        beds_breakdown[key] = beds_breakdown.get(key, 0) + 1
+
+    # Top 5 deals sorted by final_score desc (filter out zero / negative scores).
+    top = sorted(
+        [d for d in listings if (d.get('final_score') or 0) > 0],
+        key=lambda x: x.get('final_score') or 0,
+        reverse=True,
+    )[:5]
+
+    return {
+        'neighborhood': name,
+        'slug': _slugify(name),
+        'count': len(listings),
+        'median_price': _median(prices),
+        'median_price_per_sqft': _median(sqft_prices),
+        'min_price': min(prices) if prices else None,
+        'max_price': max(prices) if prices else None,
+        'beds_breakdown': {str(k): v for k, v in sorted(beds_breakdown.items())},
+        'top_deals': [
+            {
+                'listing_id': d.get('listing_id'),
+                'title': d.get('title'),
+                'price': d.get('price'),
+                'price_fmt': d.get('price_fmt'),
+                'beds': d.get('beds'),
+                'baths': d.get('baths'),
+                'sqft': d.get('sqft'),
+                'pct_under': d.get('pct_under'),
+                'days_ago': d.get('days_ago'),
+                'final_score': d.get('final_score'),
+                'link': d.get('link'),
+                'image_url': d.get('image_url'),
+            }
+            for d in top
+        ],
+    }
+
+
+def _neighborhoods_summary(deals) -> list:
+    """Per-neighborhood aggregate stats for /api/meta sidebar population.
+
+    Returns a list of dicts: {name, slug, count, median_price}, sorted by
+    name (case-insensitive). Neighborhoods with no priced listings are
+    omitted (count is still meaningful, median_price=None).
+    """
+    by_name: dict = {}
+    for d in deals:
+        n = (d.get('neighbourhood') or '').strip()
+        if not n:
+            continue
+        if n not in by_name:
+            by_name[n] = {'name': n, 'slug': _slugify(n), 'prices': [], 'count': 0}
+        by_name[n]['count'] += 1
+        p = _safe_float(d.get('price'))
+        if p is not None:
+            by_name[n]['prices'].append(p)
+
+    out = []
+    for name in sorted(by_name.keys(), key=lambda x: x.lower()):
+        info = by_name[name]
+        out.append({
+            'name': info['name'],
+            'slug': info['slug'],
+            'count': info['count'],
+            'median_price': _median(info['prices']),
+        })
+    return out
+
+
+def _slug_to_neighborhood(deals, slug: str) -> str | None:
+    """Reverse-lookup: given a URL slug, return the official neighborhood
+    name as it appears in `deals`, or None if no listings match.
+    """
+    if not slug:
+        return None
+    seen: set = set()
+    for d in deals:
+        n = (d.get('neighbourhood') or '').strip()
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        if _slugify(n) == slug:
+            return n
+    return None
 
 
 # MC-267/268/270: POI walk time thresholds (imported from poi.py to avoid circular imports)
@@ -184,6 +350,7 @@ def _normalize_row(r: dict) -> dict:
             'listing_id': r.get('listing_id') or r.get('url') or r.get('link', ''),
             'title': r.get('title', ''),
             'neighbourhood': r.get('neighborhood', ''),
+            'neighborhood_slug': _slugify(r.get('neighborhood', '') or ''),
             'region': r.get('region', ''),
             # MC-316: Normalize source to lowercase canonical form for filtering.
             # The CSV/DB store 'Kijiji' / 'Craigslist'; emit lowercase so the filter
@@ -344,6 +511,11 @@ def api_deals():
     hide_stale = request.args.get('hide_stale', type=lambda v: v.lower() == 'true' if v else False)
     # MC-316: Source filter (kijiji / craigslist / all)
     source = request.args.get('source', '').strip().lower()
+    # MC-323: Only NEW (6h) filter — surface listings marked fresh in MC-264.
+    # Accepts 'true' / '1' / 'yes' / 'false' / '0' / 'no' / ''. Missing or empty
+    # is treated as "no filter" so existing callers are unaffected.
+    only_new_raw = (request.args.get('is_new', '') or '').strip().lower()
+    only_new = only_new_raw in ('true', '1', 'yes')
 
     # Apply filters
     if beds_min is not None:
@@ -367,6 +539,10 @@ def api_deals():
     # MC-316: source filter — case-insensitive; empty/all returns both
     if source and source != 'all':
         deals = [d for d in deals if d.get('source', '') == source]
+    # MC-323: Only NEW filter. Only applied when explicit truthy value is
+    # passed so that GET /api/deals (no param) still returns everything.
+    if only_new:
+        deals = [d for d in deals if d.get('is_new', False) is True]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
@@ -393,7 +569,30 @@ def api_deals():
         from compute_segment_fv import compute_fair_value_with_fallback
         deals = compute_fair_value_with_fallback(deals)
 
-    return jsonify(deals[:50])
+    # MC-319: Server-side pagination. Defaults: limit=50, offset=0.
+    # Limit is hard-capped at 200 to keep responses reasonable.
+    try:
+        limit = int(request.args.get('limit', 50))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 200))
+    try:
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+    offset = max(0, offset)
+
+    total = len(deals)
+    page = deals[offset:offset + limit]
+    has_more = (offset + len(page)) < total
+
+    return jsonify({
+        'deals': page,
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+        'has_more': has_more,
+    })
 
 
 @app.route('/api/meta')
@@ -401,7 +600,7 @@ def api_meta():
     """Return min/max ranges derived from actual data for UI slider construction."""
     deals = load_deals()
     if not deals:
-        return jsonify({'beds': [], 'price': [0, 0], 'baths': [], 'regions': []})
+        return jsonify({'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [], 'neighborhoods': [], 'new_count': 0})
 
     beds_vals = sorted(set(d['beds'] for d in deals if d['beds'] is not None))
     price_vals = [min(d['price'] for d in deals), max(d['price'] for d in deals)]
@@ -409,6 +608,12 @@ def api_meta():
     regions = sorted(set(d.get('region', '') for d in deals if d.get('region', '')))
     # MC-316: Include available sources so the UI can render the filter dropdown
     sources = sorted(set(d.get('source', '') for d in deals if d.get('source', '')))
+    # MC-321: Per-neighbourhood aggregate stats for sidebar / drill-down population
+    neighborhoods = _neighborhoods_summary(deals)
+    # MC-323: Count of is_new=1 listings so the UI can render "(N new)" hint
+    # next to the Only NEW toggle. Computed before any user-supplied filter
+    # so the count reflects the full data set (the "what's new today" total).
+    new_count = sum(1 for d in deals if d.get('is_new', False) is True)
 
     return jsonify({
         'beds': beds_vals,
@@ -416,6 +621,8 @@ def api_meta():
         'baths': baths_vals,
         'regions': regions,
         'sources': sources,
+        'neighborhoods': neighborhoods,
+        'new_count': new_count,
     })
 
 
@@ -471,6 +678,35 @@ def api_export_csv():
     writer.writeheader()
     writer.writerows(deals)
     return output.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=deals.csv"}
+
+
+# ── MC-321: Neighborhood stats drill-down ────────────────────────────────────
+
+
+@app.route('/api/neighborhoods/<slug>/stats')
+def api_neighborhood_stats(slug):
+    """Per-neighborhood aggregate stats: count, median price + $/sqft,
+    min/max price, beds breakdown, top-5 deals. 404 for unknown slug.
+    """
+    deals = load_deals()
+    name = _slug_to_neighborhood(deals, slug)
+    if not name:
+        return jsonify({'error': 'neighborhood not found', 'slug': slug}), 404
+    stats = _neighborhood_stats(deals, name)
+    if not stats:
+        return jsonify({'error': 'no listings for that neighborhood', 'slug': slug}), 404
+    return jsonify(stats)
+
+
+@app.route('/neighborhood/<slug>')
+def neighborhood_page(slug):
+    """HTML drill-down page for a single neighborhood.
+
+    The page fetches /api/neighborhoods/<slug>/stats + /api/deals?neighbourhood=...
+    client-side, so it always shows live data without a server roundtrip on each
+    page view.
+    """
+    return render_template('neighborhood.html', slug=slug)
 
 
 # ── MC-259: Listing Detail Page ───────────────────────────────────────────────
@@ -1005,6 +1241,16 @@ def page_alerts():
     return render_template('alerts.html')
 
 
+@app.route('/saved-searches')
+def page_saved_searches():
+    """MC-322: Dedicated /saved-searches management page.
+
+    Renders templates/saved_searches.html. Accepts ?email=<addr> in the URL
+    (the page reads it client-side and stays usable when the param is absent).
+    """
+    return render_template('saved_searches.html')
+
+
 @app.route('/api/saved-searches')
 def api_saved_searches_list():
     """
@@ -1041,8 +1287,15 @@ def api_saved_searches_create():
         "region": "Downtown",
         "neighbourhood": "King West",
         "max_price": 2500,
-        "min_score": 0.15
+        "min_score": 0.15,
+        "filters_json": "{\"source\":\"kijiji\",\"sort\":\"pct\",...}"   # MC-322
     }
+
+    MC-322: filters_json is optional. When provided, it's stored verbatim so
+    the Save-Current-Filters button + Load-on-/saved-searches page can
+    round-trip the *raw* filter state (keys not represented by the legacy
+    columns, like source/sort/hide_stale/max_subway/has_parking). Back-compat:
+    callers that omit filters_json keep working.
     """
     data = request.get_json(force=True) or {}
     email = (data.get('email') or '').strip()
@@ -1056,6 +1309,29 @@ def api_saved_searches_create():
         if v is None: return None
         try: return float(v)
         except: return None
+
+    # MC-322: normalize filters_json — accept either a dict (auto-serialize)
+    # or a string (validate by re-parse). Reject obviously broken input early
+    # rather than at the SQLite layer.
+    raw_filters = data.get('filters_json')
+    if raw_filters is None or raw_filters == '':
+        filters_json_str = '{}'
+    elif isinstance(raw_filters, dict):
+        try:
+            filters_json_str = json.dumps(raw_filters, ensure_ascii=False)
+        except Exception:
+            return jsonify({'error': 'filters_json must be JSON-serializable'}), 400
+    elif isinstance(raw_filters, str):
+        # Validate it's parseable JSON
+        try:
+            parsed = json.loads(raw_filters) if raw_filters.strip() else {}
+        except Exception:
+            return jsonify({'error': 'filters_json must be valid JSON'}), 400
+        if not isinstance(parsed, dict):
+            return jsonify({'error': 'filters_json must decode to an object'}), 400
+        filters_json_str = raw_filters if raw_filters.strip() else '{}'
+    else:
+        return jsonify({'error': 'filters_json must be object or string'}), 400
 
     try:
         from persist import upsert_saved_search
@@ -1071,6 +1347,7 @@ def api_saved_searches_create():
             min_score=_f(data.get('min_score')),
             max_commute=_f(data.get('max_commute')),
             commute_dest=data.get('commute_dest') or None,
+            filters_json=filters_json_str,
         )
         return jsonify({'success': True, 'search_id': search_id})
     except Exception as e:
@@ -1082,6 +1359,8 @@ def api_saved_searches_update(search_id: int):
     """
     MC-266: Update a saved search.
     PUT body: same as POST body + ?email=... for ownership check.
+
+    MC-322: also accepts filters_json in the PUT body; persisted verbatim.
     """
     email = request.args.get('email', '').strip()
     if not email:
@@ -1095,6 +1374,30 @@ def api_saved_searches_update(search_id: int):
         if v is None: return None
         try: return float(v)
         except: return None
+
+    # MC-322: same normalization as POST.
+    raw_filters = data.get('filters_json')
+    if raw_filters is None or raw_filters == '':
+        # Allow callers to *not* update filters_json; signal "keep existing"
+        # with a sentinel by passing the existing value back.
+        from persist import get_saved_search_by_id
+        existing = get_saved_search_by_id(email, search_id)
+        filters_json_str = (existing or {}).get('filters_json') or '{}'
+    elif isinstance(raw_filters, dict):
+        try:
+            filters_json_str = json.dumps(raw_filters, ensure_ascii=False)
+        except Exception:
+            return jsonify({'error': 'filters_json must be JSON-serializable'}), 400
+    elif isinstance(raw_filters, str):
+        try:
+            parsed = json.loads(raw_filters) if raw_filters.strip() else {}
+        except Exception:
+            return jsonify({'error': 'filters_json must be valid JSON'}), 400
+        if not isinstance(parsed, dict):
+            return jsonify({'error': 'filters_json must decode to an object'}), 400
+        filters_json_str = raw_filters if raw_filters.strip() else '{}'
+    else:
+        return jsonify({'error': 'filters_json must be object or string'}), 400
 
     try:
         from persist import upsert_saved_search
@@ -1115,9 +1418,59 @@ def api_saved_searches_update(search_id: int):
             min_score=_f(data.get('min_score')),
             max_commute=_f(data.get('max_commute')),
             commute_dest=data.get('commute_dest') or None,
+            filters_json=filters_json_str,
         )
         return jsonify({'success': True, 'search_id': search_id})
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches/load', methods=['GET'])
+def api_saved_searches_load():
+    """
+    MC-322: Return a single saved search by id + email so the /saved-searches
+    management page's Load button can hand the captured filters back to
+    index.html's applySavedFilters() helper.
+
+    Query params: ?email=<addr>&id=<int>
+    Returns: {success, search: {search_id, name, filters_dict, beds_min,
+            beds_max, baths_min, price_min, price_max, neighbourhood,
+            region, min_score, max_commute, commute_dest}} on 200,
+            or {error} on 400/404/500.
+    """
+    email = (request.args.get('email') or '').strip()
+    search_id_raw = request.args.get('id') or ''
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    try:
+        search_id = int(search_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'id must be an integer'}), 400
+    try:
+        from persist import get_saved_search_by_id
+        row = get_saved_search_by_id(email, search_id)
+        if not row:
+            return jsonify({'error': 'Not found or not yours'}), 404
+        # Strip internal fields, normalize top_match if present
+        out = {
+            'search_id': row['search_id'],
+            'name': row['name'],
+            'beds_min': row.get('beds_min'),
+            'beds_max': row.get('beds_max'),
+            'baths_min': row.get('baths_min'),
+            'price_min': row.get('price_min'),
+            'price_max': row.get('price_max'),
+            'neighbourhood': row.get('neighbourhood'),
+            'region': row.get('region'),
+            'min_score': row.get('min_score'),
+            'max_commute': row.get('max_commute'),
+            'commute_dest': row.get('commute_dest'),
+            'filters_json': row.get('filters_json') or '{}',
+            'filters_dict': row.get('filters_dict') or {},
+        }
+        return jsonify({'success': True, 'search': out})
+    except Exception as e:
+        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
