@@ -185,6 +185,10 @@ def _normalize_row(r: dict) -> dict:
             'title': r.get('title', ''),
             'neighbourhood': r.get('neighborhood', ''),
             'region': r.get('region', ''),
+            # MC-316: Normalize source to lowercase canonical form for filtering.
+            # The CSV/DB store 'Kijiji' / 'Craigslist'; emit lowercase so the filter
+            # param is case-insensitive.
+            'source': (r.get('source') or '').strip().lower(),
             'beds': beds,
             'baths': baths,
             'price': price,
@@ -338,6 +342,8 @@ def api_deals():
     max_subway = request.args.get('max_subway', type=int)
     commute_dest = request.args.get('commute_dest', '').strip()
     hide_stale = request.args.get('hide_stale', type=lambda v: v.lower() == 'true' if v else False)
+    # MC-316: Source filter (kijiji / craigslist / all)
+    source = request.args.get('source', '').strip().lower()
 
     # Apply filters
     if beds_min is not None:
@@ -358,6 +364,9 @@ def api_deals():
         deals = [d for d in deals if d.get('region', '') == region]
     if hide_stale:
         deals = [d for d in deals if not d.get('is_stale', False)]
+    # MC-316: source filter — case-insensitive; empty/all returns both
+    if source and source != 'all':
+        deals = [d for d in deals if d.get('source', '') == source]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
@@ -398,12 +407,15 @@ def api_meta():
     price_vals = [min(d['price'] for d in deals), max(d['price'] for d in deals)]
     baths_vals = sorted(set(d['baths'] for d in deals if d['baths'] is not None))
     regions = sorted(set(d.get('region', '') for d in deals if d.get('region', '')))
+    # MC-316: Include available sources so the UI can render the filter dropdown
+    sources = sorted(set(d.get('source', '') for d in deals if d.get('source', '')))
 
     return jsonify({
         'beds': beds_vals,
         'price': [int(price_vals[0]), int(price_vals[1])],
         'baths': baths_vals,
         'regions': regions,
+        'sources': sources,
     })
 
 

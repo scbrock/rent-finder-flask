@@ -87,6 +87,13 @@
     .new-tag { background: #c3f0ca; color: #0d5c26; padding: 1px 6px; border-radius: 8px;
                font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
 
+    /* ── Source badge (MC-316) ── */
+    .source-badge { display: inline-block; padding: 1px 6px; border-radius: 8px;
+                    font-size: 0.65rem; font-weight: 700; margin-left: 4px;
+                    letter-spacing: 0.5px; text-transform: uppercase; }
+    .source-kijiji { background: #e0f0ff; color: #1e5b94; border: 1px solid #b3d9ff; }
+    .source-cl { background: #fff0e0; color: #8b4513; border: 1px solid #ffc299; }
+
     /* ── Cautions column (MC-255) ── */
     .cautions-cell { min-width: 160px; }
     .caution-chip {
@@ -345,6 +352,16 @@
       </select>
     </div>
 
+    <!-- Source (MC-316: Kijiji vs Craigslist) -->
+    <div class="filter-group">
+      <label>Source</label>
+      <select id="source">
+        <option value="">All</option>
+        <option value="kijiji">Kijiji</option>
+        <option value="craigslist">Craigslist</option>
+      </select>
+    </div>
+
     <!-- Commute destination -->
     <div class="filter-group">
       <label>Commute Destination</label>
@@ -386,6 +403,9 @@
       <button id="filter_reset" onclick="resetFilters()">Reset</button>
       <button id="compare_btn" style="display:none;background:#2d6a4f;color:white;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;" onclick="window.__compare.openCompareModal()" title="Open side-by-side comparison">
         <span id="compare_btn_label">Compare 2</span>
+      </button>
+      <button id="clear_all_btn" type="button" style="display:none;background:#fff;color:#c1452d;border:1px solid #c1452d;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;" onclick="if(window.__compare){window.__compare.clearCompare();window.__compare.updateCompareBadge();window.__compare.syncRowCheckboxes();}" title="Clear all selected listings from compare set">
+        <span id="clear_all_btn_label">Clear All (0)</span>
       </button>
       <span id="filter_count" class="filter-badge">0</span>
     </div>
@@ -511,7 +531,10 @@
       <button onclick="window.__compare.closeCompareModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:1.4rem;cursor:pointer;color:#666;" aria-label="Close compare modal">×</button>
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;">
         <h2 style="font-size:1.3rem;color:#2d6a4f;margin:0;">⚖ Compare Listings</h2>
-        <button id="compare_clear_btn" style="margin-left:auto;background:#fff;color:#c1452d;border:1px solid #c1452d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:600;" onclick="if(window.__compare){window.__compare.clearCompare();window.__compare.updateCompareBadge();window.__compare.syncRowCheckboxes();window.__compare.closeCompareModal();}">Clear Selection</button>
+        <button id="cmp_share_btn" type="button" style="margin-left:auto;background:#2d6a4f;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:600;" onclick="if(window.__compare){window.__compare.copyShareLink();}" title="Copy a shareable link to this comparison">
+          Copy Link
+        </button>
+        <button id="compare_clear_btn" style="background:#fff;color:#c1452d;border:1px solid #c1452d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:600;" onclick="if(window.__compare){window.__compare.clearCompare();window.__compare.updateCompareBadge();window.__compare.syncRowCheckboxes();window.__compare.closeCompareModal();}">Clear Selection</button>
       </div>
       <div id="compare_error" style="display:none;background:#fdecea;color:#c1452d;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:0.85rem;"></div>
       <div id="compare_body">Select 2-3 listings using the ⚖ checkboxes in the deals table, then click "Compare".</div>
@@ -649,6 +672,7 @@ function parseQueryParams() {
   }
   if (params.get('neighbourhood')) document.getElementById('neighbourhood').value = params.get('neighbourhood');
   if (params.get('region')) document.getElementById('region').value = params.get('region');
+  if (params.get('source')) document.getElementById('source').value = params.get('source');
   if (params.get('sort')) {
     document.getElementById('sort_by').value = params.get('sort');
     currentSort = params.get('sort');
@@ -672,6 +696,7 @@ function buildParams() {
   const hasParking = document.getElementById('has_parking').checked;
   const neighbourhood = document.getElementById('neighbourhood').value.trim();
   const region = document.getElementById('region').value;
+  const source = document.getElementById('source').value;
   const sortBy = document.getElementById('sort_by').value;
   const hideStale = document.getElementById('hide_stale').checked;
 
@@ -682,6 +707,7 @@ function buildParams() {
   if (hasParking) params.set('has_parking', 'true');
   if (neighbourhood) params.set('neighbourhood', neighbourhood);
   if (region) params.set('region', region);
+  if (source) params.set('source', source);
   if (sortBy !== 'score') params.set('sort', sortBy);
   if (hideStale) params.set('hide_stale', 'true');
 
@@ -726,6 +752,7 @@ function resetFilters() {
   document.getElementById('parking_toggle').classList.remove('active');
   document.getElementById('neighbourhood').value = '';
   document.getElementById('region').selectedIndex = 0;
+  document.getElementById('source').selectedIndex = 0;
   document.getElementById('sort_by').selectedIndex = 0;
   document.getElementById('hide_stale').checked = false;
   document.getElementById('hide_stale_toggle').classList.remove('active');
@@ -900,6 +927,11 @@ function renderDeals(deals) {
     const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">⚠️ Stale</span>' : '';
     // MC-264: NEW badge for listings first seen in the last 6 hours
     const newTag = (d.is_new === true || d.is_new === 'true') ? '<span class="new-tag">✨ NEW</span>' : '';
+    // MC-316: Source badge (Kijiji / Craigslist)
+    const srcRaw = (d.source || '').toLowerCase();
+    const srcLabel = srcRaw === 'kijiji' ? 'Kijiji' : srcRaw === 'craigslist' ? 'CL' : '';
+    const srcClass = srcRaw === 'kijiji' ? 'source-kijiji' : srcRaw === 'craigslist' ? 'source-cl' : '';
+    const srcTag = srcLabel ? `<span class="source-badge ${srcClass}" title="${srcLabel} listing">${srcLabel}</span>` : '';
 
     // MC-255: Cautions column
     const cautions = d.cautions || [];
@@ -926,7 +958,7 @@ function renderDeals(deals) {
         }
         return '<div class="deal-thumb-fallback">🏠</div>';
       })()}</td>
-      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag}</td>
+      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${srcTag}</td>
       <td>${d.region || '—'}</td>
       <td>${beds}</td>
       <td>${baths}</td>
