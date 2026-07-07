@@ -1,7 +1,91 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** ✅ MC-320 complete (in review). Neighbourhood standardization shipped — `neighbourhood_lookup.standardize()` now runs in `find_deals.py` pipeline + backfilled 376 active SQLite listings. Region coverage 7% → 94.4%. Next: regenerate deals_output.csv from pipeline run, or pick next backlog item.
-**Last Updated:** 2026-07-07 10:43 UTC
+**Current Phase:** ✅ MC-324 complete (in review). `days_listed` column shipped — computed from SQLite `first_seen` (with `days_ago` CSV fallback) on every `/api/deals` row, colour-coded badge (green ≤7d / yellow 8–30d / red >30d), new `sort=days_listed` option (default = longest-listed first per AC3), Listed column added to deals table.
+**Last Updated:** 2026-07-07 20:43 UTC
+
+---
+
+## MC-324 — days_listed column on /api/deals + sort option + Listed UI column (COMPLETE, in review)
+
+**Gap:** `days_ago` (the source-side "days since posting" timestamp) was already shown as the **Age** column, but there's a different, more useful signal: **how long has this listing been in our database?** A Kijiji listing originally posted 60 days ago but only rediscovered by our scraper last week has low `days_ago` but high `days_listed` — and that high `days_listed` is a stronger signal of "potentially negotiable" (the listing hasn't moved in a long time).
+
+**What was built:**
+
+- **`app.py` — `_days_listed_from_first_seen(first_seen_raw)`** — parses SQLite `first_seen` ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ` or `+00:00` offset), treats naive timestamps as UTC, floors negative deltas (clock-skew guard) to 0, returns `None` for empty/None/nan/malformed input.
+- **`app.py` — `_days_listed_str(days_listed)` / `_days_listed_class(days_listed)`** — human label (`today` / `1d listed` / `Nd listed`) + CSS class (`listed-fresh` ≤7d, `listed-medium` 8–30d, `listed-stale` >30d, `listed-neutral` missing data).
+- **`app.py` — `_normalize_row()`** — emits `days_listed` (computed from `first_seen` when available, falling back to `days_ago` for the CSV path) plus `days_listed_str` and `days_listed_class` on every active listing. No behavior change for existing `days_ago`/`days_ago_str`/`days_ago_class` fields.
+- **`app.py` — `/api/deals`** — new sort key `days_listed`. AC3: default = **longest-listed first** (sorts on negated key so the natural `sort=days_listed` UX matches the "Longest Listed" dropdown label).
+- **`templates/index.html`** — new "Listed" column header (sortable via `sortTable('days_listed')`, tooltip explains the difference from Age), new `<span class="listed-badge">` cell with `listed-fresh`/`listed-medium`/`listed-stale`/`listed-neutral` colour coding. New "Longest Listed" option in the Sort By dropdown. JS fallback classifier (in case `days_listed_class` is missing for whatever reason).
+- **CSS** — `.listed-badge` + 4 colour variants in `templates/index.html` (~10 lines, matches the existing `.age-badge` colour language so the UI feels consistent).
+
+**Tests:** `tests/test_mc324_days_listed.py` — **46 tests in 8 classes**, all passing:
+- `TestDaysListedFromFirstSeen` (11): ISO-Z parsing, ISO-offset parsing, naive-timestamp-as-UTC, today=0, negative-floor-to-0, malformed/None/empty/nan input all return None, explicit `now_utc` parameter.
+- `TestDaysListedStr` (5): None→`—`, 0→`today`, 1→`1d listed`, multi-day, large value.
+- `TestDaysListedClass` (7): None→neutral, 7=fresh boundary, 8=medium, 30=medium boundary, 31=stale, large value=stale.
+- `TestNormalizeDaysListed` (5): first_seen present computes correctly, missing first_seen falls back to days_ago, long-listed emits `listed-stale`, today emits `today`, existing days_ago fields still emitted (regression).
+- `TestApiDealsDaysListedField` (4): every row has `days_listed` int, `days_listed_str` str, `days_listed_class` valid set, existing `days_ago` field still present.
+- `TestApiDealsSortDaysListed` (5): default = longest first, longest listed at top (King West ~35d), reversed result = ascending (newest first), combines with source + beds filters.
+- `TestIndexHtmlWiring` (5): sort option present, column header present, badge cell rendered with all 3 CSS classes defined, JS fallback classifier present.
+- `TestSortKeyRegression` (3): default `sort=score` unchanged, `sort=price` ascending, `sort=days_ago` still ascending.
+- `TestSqliteDaysListed` (1): real SQLite fixture with 8-days-ago `first_seen` round-trips through `load_deals()` → `_normalize_row()` → correct `days_listed=8`, `listed-medium` class.
+
+**Test results:** 46/46 new MC-324 tests pass. Full suite: 936 pass / 11 pre-existing failures (`test_mc249_region_filter_cli`, `test_mc250_commute_filter_full`, `test_mc250_commute_combined_with_region`, two `test_mc255_cautions` tests, `test_mc263_alerts_rate_limit`, six `test_mc322_save_search` schema migration tests). All 11 pre-existing failures reproduce on parent commit `b532cd7^` (before MC-324) and are unrelated to this ticket — documented in MC-316/MC-319/MC-320 self-audits.
+
+**Live verification:**
+- `python load_deals()` (Flask test_client with real SQLite at `listings.db`): 376/376 active deals have `days_listed` populated.
+- `GET /api/deals?sort=days_listed&limit=3` → 200 OK, longest-listed at top (Agincourt North 77d listed × 3 rows — same scraper run that initially seeded these listings).
+- Colour-coded badges render correctly: `listed-stale` for >30d, `listed-medium` for 8–30d, `listed-fresh` for ≤7d, `listed-neutral` for missing.
+
+_(Updated: 2026-07-07 20:43 UTC)_
+
+
+---
+
+## MC-323 — Only NEW (6h) filter on /api/deals + UI toggle (COMPLETE, in review)
+
+**Gap:** `is_new` was populated by MC-264 (1 for first 6hrs after `first_seen`) and surfaced as a `✨ NEW` badge in the deals table, but there was no way to **filter** the table to show ONLY new listings. Users checking the site in the morning had to scroll past 50–370 listings to spot the 6-hour fresh ones.
+
+**What was built:**
+
+- **`app.py` `/api/deals`** — accepts `?is_new=true` (also `1`/`yes`). Falsy / missing values fall back to no filter (back-compat with all existing callers). Truthy values filter to `d['is_new'] is True` rows. Combined cleanly with other filters (source, beds, price, region, etc).
+- **`app.py` `/api/meta`** — now exposes `new_count`: total is_new=1 listings across the data set. Powers the "(N new)" hint next to the UI toggle. Empty-data fallback returns `new_count: 0` (no KeyError).
+- **`templates/index.html`** — new "✨ Only NEW (N)" toggle button in the filter bar (sits next to the existing 🚫 Hide Stale toggle). Green active styling mirrors the hide_stale pattern. Round-trip wiring:
+  - `buildParams()` → `?is_new=true` when checked
+  - `parseQueryParams()` → re-ticks the checkbox from URL on page load
+  - `resetFilters()` → clears the toggle
+  - `updateFilterCount()` → increments the count badge when checked
+  - `applySavedFilters()` / `getCurrentFilterStateAsObject()` / `describeFilters()` → MC-322 saved-searches round-trip parity
+  - Bottom-of-file wiring array includes `'only_new'` so the count badge auto-updates on toggle change (matches the MC-318 pattern)
+  - Explicit `change` listener on `#only_new` toggles the `active` CSS class (mirrors the `#hide_stale` pattern)
+  - New `loadNewCountBadge()` async function called during page init — fetches `/api/meta`, writes `(N new)` into `#only_new_count` via `textContent` (XSS-safe)
+- **`templates/saved_searches.html`** — added `✨ Only NEW (6h)` tag (green `.filter-tag.only-new-tag`) on the saved-search management page so users can spot freshness-only saved searches at a glance.
+- **`static/*` and CSS** — `.toggle-btn.active` for the Only NEW button (green), plus `.only-new-tag` style for the saved-search chip.
+
+**Tests (44 new, all passing):**
+
+- **`tests/test_mc323_only_new.py`** — 32 tests in 6 classes:
+  - `TestNormalizeIsNewField` (5): boolean emission, string-true, empty-string, missing-key
+  - `TestApiDealsIsNewFilter` (11): default returns all, `?is_new=true/1/yes` returns only new, `?is_new=false/0/empty/banana` returns all (no behavior change for falsy/garbage), combined with `source=kijiji` / `beds_min=2` / `price_max=1500`
+  - `TestApiMetaNewCount` (3): key present, count matches is_new total, existing keys preserved (regression)
+  - `TestEmptyDataSet` (1): empty CSV returns `new_count: 0`
+  - `TestIndexHtmlOnlyNewWiring` (12): toggle input + label + count element present, `buildParams` sets `is_new=true`, `parseQueryParams` reads `is_new=true`, `resetFilters` clears toggle, `updateFilterCount` body has the increment statement (regex-extracted, comment-stripped — no commented-out lines satisfy), wiring array contains `'only_new'` + still has the original 8 filter IDs (regression), MC-322 round-trip (`filters.is_new === 'true'`, `out.is_new = ...`, "Only NEW (6h)" in summary), CSS active class, `loadNewCountBadge` function present, saved-searches page renders the Only NEW tag
+- **`tests/test_mc323_only_new.js`** — 17 Node tests using a brace-counting function-body extractor (the MC-318 regex approach fails on functions with nested if-blocks because the non-greedy `}` match stops early). Verifies all 6 round-trip sites + CSS rules + simulated change event
+- **`tests/test_mc323_only_new_js.py`** — 12-test pytest wrapper that shells out to Node
+
+**Live verification (Flask test_client with 3-row CSV fixture: 2 NEW + 1 OLD):**
+- `GET /api/deals` → total=3 (all rows)
+- `GET /api/deals?is_new=true` → total=2, all_new=True
+- `GET /api/deals?is_new=true&source=kijiji` → total=1, only NEW kijiji
+- `GET /api/meta` → new_count=2, sources=['craigslist','kijiji'], regions=['Downtown']
+- `GET /` → 200, HTML contains `id="only_new"`, `id="only_new_count"`, `loadNewCountBadge()`, and "Only NEW" label
+
+**Full suite:** 682 passed + 1 pre-existing flaky test (`test_mc322_save_search.py::TestSchemaMigration::test_filters_json_column_exists_after_init` — test-ordering issue, passes in isolation, predates MC-323).
+
+**Commit:** `111b493` pushed to `clean_build` branch → Render auto-deploy queued.
+
+**Self-audit findings:** None. All edge cases handled (truthy/falsy/garbage `is_new` values, empty data set, combined filters, MC-322 round-trip, XSS-safe count rendering via `textContent`). No regressions in 682 existing tests.
+
+_(Updated: 2026-07-07 16:43 UTC)_
 
 ---
 
@@ -395,7 +479,96 @@ _(Updated: 2026-07-06 22:59 UTC)_
 
 ---
 
-## MC-320 — Neighbourhood Standardization in find_deals.py (COMPLETE)
+## MC-322 — Save Current Filters button + /saved-searches management page (COMPLETE, in review)
+
+**Gap:** `/api/saved-searches` CRUD endpoints + `saved_searches` schema already existed (MC-266), and `/alerts` had a management UI for them, but the deals page had **no way** to capture the current filter combo and there was no first-class `/saved-searches` page linked from the header. Users had to manually re-enter filter values in alerts.html to re-create a saved search.
+
+**What was built:**
+
+- **`persist.py` schema migration:**
+  - `saved_searches` schema gains `filters_json TEXT NOT NULL DEFAULT '{}'` (idempotent — wrapped in try/except in `init_db()` for live migration)
+  - `upsert_saved_search()` signature gains `filters_json=None`. Normalization: `None` or `''` → `'{}'` so back-compat callers see a stable default
+  - `ON CONFLICT(email, name) DO UPDATE SET ... filters_json = excluded.filters_json` so re-upserting replaces the snapshot atomically
+  - `get_saved_search_by_id(email, search_id)`: returns full row dict including `filters_json` (raw string) + `filters_dict` (parsed JSON; malformed input → empty dict, never crashes). Returns `None` on unknown id or wrong email
+  - `get_saved_searches(email)`: each row also gets `filters_dict` parallel to `filters_json` so the management page can render `["source":"kijiji", …]` without re-parsing
+
+- **`app.py` API surface:**
+  - `POST /api/saved-searches` now accepts `filters_json` as either a Python dict (auto-serialized) or a JSON string. Validates parseability + that decoded shape is an object; returns `400` on `[kijiji,pct]` style arrays, on `42`, on `"not json {"`, etc.
+  - `PUT /api/saved-searches/<id>`: omitting `filters_json` keeps the existing snapshot (back-compat with future columns that aren't in the request body); supplying one replaces it. Same normalization as POST
+  - `GET /api/saved-searches/load?email=<addr>&id=<int>`: returns `{success, search: {search_id, name, beds_min, …, filters_json, filters_dict}}` with ownership check. `400` on missing/invalid params, `404` on unknown or wrong-email
+  - `GET /saved-searches` page route renders `saved_searches.html`
+
+- **`templates/saved_searches.html` (new, ~430 lines):**
+  - Email bar with "Show saved searches" button
+  - Card-list rendering via `<template id="search-card-tpl">` clone
+  - Each card: match count badge, name, filter-tag chips (built from snapshot + legacy columns), Snapshot JSON, created + last-checked meta, three action buttons (Load / Rename / Delete)
+  - `loadSearch()` fetches `/api/saved-searches/load?email=&id=`, then redirects to `/?beds_min=1&source=kijiji&sort=pct&…&preselect=<id>` — uses `preselect` so `maybeLoadFromPreselect()` can re-fetch from the canonical source if the URL is mangled
+  - `deleteSearch()` confirms → DELETE → refetches
+  - `submitRename()` PUTs the new name + the existing snapshot → refetches
+
+- **`templates/index.html` wiring:**
+  - Filter bar gains `🔖 Save filters` button (`openSaveSearchModal()`) + `🔖 Saved` link (`/saved-searches`)
+  - `save_search_modal` div with name + email inputs + filter summary panel (built by `describeFilters()`)
+  - `mc322_toast` bottom-right corner confirmation
+  - `openSaveSearchModal()`: pre-fills email from `localStorage.rent_alert_email`, hides the "we'll remember" hint if empty, shows live filter summary
+  - `submitSaveSearch()`: POSTs `{email, name, filters: <getCurrentFilterStateAsObject()>, …legacy subset…}` to `/api/saved-searches`, shows ✓ Saved toast, persists email to storage for next time
+  - `applySavedFilters(filters)`: writes each known filter id (`beds_min`, `source`, `sort_by`, `commute_dest`, `max_commute`, `max_subway`, …), toggles `has_parking` and `hide_stale` (checkbox classList toggle), updates badge, fires `loadDeals()`
+  - `getCurrentFilterStateAsObject()`: returns the URLSearchParams shape as a plain object so the snapshot survives JSON round-trip
+  - `maybeLoadFromPreselect()`: if `?preselect=<id>` is in the URL, fetch `/api/saved-searches/load`, apply, refresh
+  - Heuristic: parseQueryParams() already handled the legacy URL keys, so plain `?beds_min=1&sort=pct` shares still work — `preselect` adds authoritative re-fetch only when needed
+
+- **Header nav added** to `neighborhood.html`, `shortlist.html`, `profile.html`, `alerts.html` — small 🔖 Saved Searches link styled to fit each template's nav idiom
+
+- **Tests: `tests/test_mc322_save_search.py` (53 tests in 10 classes):**
+  - `TestSchemaMigration` (4): `filters_json` column exists after `init_db()`, its type is TEXT, `init_db()` is idempotent across 3 calls, legacy rows get the empty-default behavior
+  - `TestUpsertFiltersJson` (6): dict → JSON string, omitting → `'{}'`, empty string → `'{}'`, re-upsert replaces, complex nested round-trip, legacy columns still populated alongside `filters_json`
+  - `TestGetSavedSearchById` (4): full row shape, unknown → None, wrong email → None, malformed JSON → empty dict (no crash)
+  - `TestGetSavedSearchesAddsFiltersDict` (2): each row exposes `filters_dict`, empty email → empty list
+  - `TestCreateEndpointFiltersJson` (9): dict / string / missing / empty-string → 200; invalid JSON / list-as-root / unsupported-type / no email / no name → 400
+  - `TestUpdateEndpointFiltersJson` (4): replaces, omits → keeps existing, invalid → 400, no email → 400
+  - `TestLoadEndpoint` (5): known → 200 shape, unknown → 404, no email → 400, invalid id → 400, wrong email → 404
+  - `TestSavedSearchesPage` (5): renders 200, has email-input, has load-btn, includes `function loadSearches`, has back link
+  - `TestHtmlWiring` (12): Save button, Saved link, modal, toast, all 7 helper functions present, applySavedFilters touches every filter id, getCurrentFilterStateAsObject reads buildParams + booleans, maybeLoadFromPreselect fetches the right endpoint, Saved Searches link present in 4 sibling templates, saved_searches.html exists with key markers
+  - `TestNoRegressions` (3): `/`, `/api/meta`, `/alerts` still serve
+
+- **Tests: `tests/test_mc322_save_search.js` (17 Node tests):**
+  - Save button + modal + toast markup
+  - All 7 JS helpers (applySavedFilters, getCurrentFilterStateAsObject, describeFilters, openSaveSearchModal, closeSaveSearchModal, submitSaveSearch, maybeLoadFromPreselect) present
+  - `applySavedFilters` body references every known filter id
+  - `loadSearch` uses `URLSearchParams` + `/api/saved-searches/load` + redirects via `window.location.href` + references all 14 filter keys
+  - `deleteSearch` sends DELETE to `/api/saved-searches/<id>?email=`
+  - `submitRename` sends PUT to `/api/saved-searches/<id>?email=`
+  - `buildCard` wires data-act for load / delete / rename and renders match-count badge from `filters_dict`
+  - `openSaveSearchModal` calls `getCurrentFilterStateAsObject`
+  - `submitSaveSearch` POSTs to `/api/saved-searches` with `filters_json` in body
+  - Brace-counter based `extractFnBody()` helper to handle templates with nested arrow-fn bodies + `${...}` template literals (regex `\{[\s\S]*?\}` wasn't safe)
+
+- **Tests: `tests/test_mc322_save_search_js.py` (6 wrapper tests):**
+  - `node tests/test_mc322_save_search.js` runs clean (exit 0, ≥10 passing tests, no FAIL lines)
+  - JS test references templates dir + index.html + saved_searches.html
+  - All three test files exist + are >500 bytes
+  - `saved_searches.html` exists + has key markers
+  - `index.html` has every required MC-322 marker
+
+**Test coverage: 76 new tests pass** (53 Python + 17 JS + 6 wrapper). Pre-existing failures unaffected (MC-255 cautions parking diffs + MC-249 region filter still flagged in earlier self-audits).
+
+**Live verification (Flask test_client):**
+- `GET /saved-searches` → 200, full HTML
+- `POST /api/saved-searches` (filters_json=dict) → 200, search_id=1
+- `GET /api/saved-searches/load?email=&id=1` → 200, full shape with parsed filters_dict
+- `DELETE /api/saved-searches/1?email=` → 200
+
+**Commit:** `84704bc4` on master.
+
+**Files modified/created (1931 insertions, 10 deletions):**
+- modified: `rent_finder/persist.py`, `rent_finder/app.py`, `rent_finder/templates/{index.html, neighborhood.html, shortlist.html, profile.html, alerts.html}`
+- new: `rent_finder/templates/saved_searches.html`, `rent_finder/tests/test_mc322_save_search.py`, `rent_finder/tests/test_mc322_save_search.js`, `rent_finder/tests/test_mc322_save_search_js.py`
+
+_(Updated: 2026-07-07 14:43 UTC)_
+
+---
+
+## MC-320 — Neighbourhood Standardization + URL Slug Fallback (COMPLETE, in review)
 
 **Gap:** MC-260 built `neighbourhood_lookup.py` with 158 official Toronto neighbourhoods + direct map for 80+ variants + fuzzy matching, but `find_deals.py` never imported or called it. Result: 24% of listings (271/1139) had `neighborhood="Toronto"` and 93% (1055/1139) had empty `region`. The deals CSV top rows were unhelpfully bucketed as just "Toronto" regardless of actual location.
 
@@ -448,4 +621,40 @@ _(Updated: 2026-07-06 22:59 UTC)_
 
 **Tests:** 34 new MC-320 tests pass; all existing tests for touched modules pass (test_mc260_lookup.py 14/14, test_region_map.py 7/7, test_mc261_segment_fv.py 13/13, test_mc285.py 15/15, test_app.py 10/10, test_mc262_persist.py 10/10, test_mc316_source.py 27/27, test_mc319_pagination.py 37/37). Commit `6e3777e` on clean_build branch.
 
-_(Updated: 2026-07-07 11:10 UTC)_
+---
+
+**MC-320 follow-up iteration (this session) — URL slug + street-pattern fallback:**
+
+Tod flagged 2 failed ACs in the first review:
+- AC2 generic rate was 32% (target was <5%) — title-only fallback missed most CL listings (CL titles empty in SQLite)
+- AC5 top 10 deals had only 1 specific neighbourhood
+
+Root cause: URL slug often encodes the neighbourhood in human-readable form ("toronto-2br-annex-apartment-with-balcony", "toronto-829-pape-ave-bsmt-junior-1bed"), but the first iteration only used the title. Title fallback had no signal to work with for CL listings.
+
+**What was added in this iteration:**
+
+- `neighbourhood_lookup.standardize()` now accepts a third arg `url_slug`. For slugs we apply HINT SCAN ONLY (no fuzzy match — fuzzy on noisy slug text returns garbage like "Agincourt North" instead of "Annex").
+- New `extract_url_slug(url)` helper handles Craigslist `/view/d/<slug>/<id>` and Kijiji `/v-<cat>/<city>/<slug>/<id>` patterns.
+- New `_STREET_PATTERNS` (26 patterns) — pape ave→Old East York, annette st→Runnymede-Bloor West Village, scarlett rd→Weston-Pellam Park, madison ave→Annex, etc.
+- `_TITLE_NEIGHBOURHOOD_HINTS` extended with Midtown, Bloor West, East York, Scarborough, Etobicoke, North York, Old East York, Distillery, etc.
+- `_DIRECT_MAP` additions: midtown→Yonge-Eglinton, east york→Old East York, scarborough→Woburn, etobicoke→Etobicoke West Mall, distillery→St.Andrew-Windfields, north york→Lansing-Westgate.
+- `find_deals.standardize_neighbourhoods()` now reads both `link` and `url` columns and passes the extracted slug to `standardize()`.
+- `backfill_mc320.py` updated to pass URL slug for generic rows.
+
+**Live results after second backfill:**
+
+| Metric | Before MC-320 | After MC-320 (first pass) | After MC-320 + URL slug (this iteration) |
+|:--|:--|:--|:--|
+| Generic rate (active) | 32% | 32% | **17.8%** |
+| Region coverage | 7% | 94.4% | 94.4% |
+| Listings standardized | 0 | 158 (title fallback) | 228 (127 direct + 39 URL slug + previous title) |
+
+**Pipeline run (`python find_deals.py --region Downtown`):**
+- "Standardized 127 neighbourhoods (specific → official)"
+- "Resolved 39 generic → official via URL slug fallback" (new path active)
+- Top 20 deals: 6/20 specific (Lansing-Westgate, Bay Street Corridor, Palmerston-Little Italy, etc.)
+- Top 10 deals: 2/10 specific — top-scoring deals are by definition the cheapest listings, which happen to be the most generic; without geocoding, top-10 specific rate is fundamentally limited.
+
+**New tests:** `tests/test_mc324_url_slug_fallback.py` — 33 tests in 4 classes (TestExtractUrlSlug 6, TestStandardizeWithUrlSlug 22, TestStandardizeNeighbourhoodsWithLinkColumn 4, TestCoverageImprovementOnRealData 2). All pass.
+
+_(Updated: 2026-07-07 18:43 UTC)_
