@@ -191,6 +191,26 @@ _DIRECT_MAP: dict[str, str] = {
     # Address noise that slips through normalization
     "278 archerhill circ": "L'Amoreaux",
     "dalton road": "L'Amoreaux",
+    # MC-320 additions: common scraped variants that fuzzy-matched wrongly
+    "king west": "Niagara",
+    "kingsway south": "Kingsway South",
+    "dupont and dufferin": "Dufferin Grove",
+    "dufferin and davenport": "Dufferin Grove",
+    "dovercourt and bloor": "Dovercourt-Wallace Emerson-Junction",
+    "roncesvalles and queen": "Roncesvalles",
+    "ossington and queen": "Trinity-Bellwoods",
+    "spadina and queen": "Kensington-Chinatown",
+    "yonge and eglinton": "Yonge-Eglinton",
+    "yonge and sheppard": "Willowdale East",
+    "yonge and finch": "Willowdale West",
+    "dundas and spadina": "Kensington-Chinatown",
+    "dundas and bathurst": "Trinity-Bellwoods",
+    "bloor and bathurst": "Annex",
+    "bloor and spadina": "Annex",
+    "bloor and yonge": "Yorkville",
+    "queen and broadview": "South Riverdale",
+    "broadview and dundas": "North Riverdale",
+    "junction area": "Junction Area",
 }
 
 # ── Fuzzy matching ────────────────────────────────────────────────────────────
@@ -257,6 +277,91 @@ def get_centroid(raw_neighbourhood: str) -> tuple[float, float] | None:
     result = lookup(raw_neighbourhood)
     if result:
         return result['lat'], result['lng']
+    return None
+
+
+# MC-320: Title-based extraction fallback.
+# Listings with neighborhood="Toronto" or "" often encode the real neighbourhood
+# in the title text (e.g. "1BR in King West", "Annex 2BR condo").
+_GENERIC_NEIGHBOURHOOD_INPUTS = frozenset({
+    "toronto", "city of toronto", "gt", "gta", "ontario", "",
+    "toronto, on", "toronto, ontario", "downtown toronto",
+})
+
+_TITLE_NEIGHBOURHOOD_HINTS = (
+    # Ordered roughly by specificity — exact match first.
+    "Bay Street Corridor", "Entertainment District", "Financial District",
+    "Liberty Village", "Queen West", "King West", "Kensington Market",
+    "Trinity Bellwoods", "Trinity-Bellwoods", "Distillery District",
+    "St. Lawrence", "St. James Town", "Church-Wellesley",
+    "The Beaches", "Leslieville", "Roncesvalles", "Little Italy",
+    "Little Portugal", "The Annex", "Annex", "Cabbagetown", "Corktown",
+    "Regent Park", "Moss Park", "Garden District", "Harbourfront",
+    "Waterfront", "CityPlace", "Fort York", "Niagara", "Downsview",
+    "Parkdale", "High Park", "Junction", "Dovercourt", "Dufferin Grove",
+    "Palmerston", "Christie Pits", "Seaton Village", "Brockton",
+    "Mimico", "Long Branch", "New Toronto", "Islington", "The Kingsway",
+    "Yorkville", "Rosedale", "Summerhill", "The Junction",
+)
+
+
+def standardize(raw_neighbourhood: str, title: str = "") -> str | None:
+    """
+    Map a raw scraped neighbourhood (with optional title fallback) to an
+    official Toronto neighbourhood name. Returns None if no good match.
+
+    Resolution order:
+    1. If raw_neighbourhood is specific (not a generic "Toronto"/""):
+       a. lookup(raw_neighbourhood) — exact / direct-map / substring / fuzzy
+       b. If lookup succeeded, return official name.
+    2. Check if raw_neighbourhood is a non-Toronto municipality (return "").
+    3. Try the title (if provided):
+       a. lookup(title) — may pick up "1BR in King West" -> "Niagara"
+       b. Scan title for known hints ("King West", "Annex", "Yorkville", etc.)
+    4. Return None — caller should keep the original string.
+
+    Returns:
+        - str: official neighbourhood name (e.g. "Bay Street Corridor")
+        - "": empty string if non-Toronto municipality (Mississauga, Vaughan, etc.)
+        - None: if no match at all — caller should keep the original string
+    """
+    # Generic inputs like "Toronto" / "city of toronto" / "" are too vague for
+    # the direct lookup path — the fuzzy match can return weird results
+    # (e.g. lookup("city of toronto") -> "Agincourt North" via fuzzy noise).
+    # Skip step 1 for generic values and rely on the title scan instead.
+    norm_lower = (raw_neighbourhood or "").lower().strip()
+    is_generic = norm_lower in _GENERIC_NEIGHBOURHOOD_INPUTS
+
+    if not is_generic:
+        # 1. Direct lookup on specific neighbourhood
+        if raw_neighbourhood:
+            result = lookup(raw_neighbourhood)
+            if result is not None:
+                return result['official_name']
+            # Non-Toronto: lookup returns None when direct map says ""
+            norm = _normalize(raw_neighbourhood)
+            if norm in _DIRECT_MAP and not _DIRECT_MAP[norm]:
+                return ""  # explicitly non-Toronto
+
+    # 2. Try the title as a whole (e.g. "1BR Condo in King West")
+    if title:
+        result = lookup(title)
+        if result is not None:
+            return result['official_name']
+        norm = _normalize(title)
+        if norm in _DIRECT_MAP and not _DIRECT_MAP[norm]:
+            return ""
+
+    # 3. Scan title for known neighbourhood hints
+    if title:
+        title_lower = title.lower()
+        for hint in _TITLE_NEIGHBOURHOOD_HINTS:
+            if hint.lower() in title_lower:
+                # Validate via lookup to be safe
+                result = lookup(hint)
+                if result is not None:
+                    return result['official_name']
+
     return None
 
 
