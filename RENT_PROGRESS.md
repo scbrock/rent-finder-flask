@@ -1,7 +1,7 @@
-﻿# Toronto Rent Deal Finder — Progress Log
+# Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** 🔄 Pipeline Maintenance - all MC-2xx + MC-3xx complete. MC-312 (gallery carousel) just shipped. Pipeline healthy at ~400 listings/run.
-**Last Updated:** 2026-07-06 18:43 UTC
+**Current Phase:** ✅ MC-320 complete (in review). Neighbourhood standardization shipped — `neighbourhood_lookup.standardize()` now runs in `find_deals.py` pipeline + backfilled 376 active SQLite listings. Region coverage 7% → 94.4%. Next: regenerate deals_output.csv from pipeline run, or pick next backlog item.
+**Last Updated:** 2026-07-07 10:43 UTC
 
 ---
 
@@ -328,3 +328,124 @@ _(Updated: 2026-07-06 18:43 UTC)_
 
 _(Updated: 2026-07-06 16:43 UTC)_
 
+
+
+## MC-314 - Shareable Compare URL + Clear-All-Selected (COMPLETE, in review)
+
+**What was built:**
+- static/compare.js (228 new lines): URL encode/decode + restore + clear helpers (MC-314 additions)
+  - parseSelectionString(s, cap) - comma-split + dedupe, optional cap argument (Infinity disables truncation, used by URL parser to detect wrong-count)
+  - encodeSelection(ids) - URL-safe serialization
+  - parseURLSelection(searchString) - returns array of 2..3 ids, [] if invalid count, 
+ull if absent
+  - 
+estoreFromURL(searchString) - hydrates state from URL, mirrors to localStorage, returns true/false
+  - clearURLParam() - strips ?cmp= via history.replaceState, returns false if no cmp key (no-op safe)
+  - uildShareURL() - constructs full URL with ?cmp=<ids>
+  - copyShareLink() - 3-level fallback: 
+avigator.clipboard.writeText → document.execCommand('copy') → window.prompt
+  - allbackCopy(url) / lashCopyButton(kind) - graceful degradation UI
+  - updateClearAllButton() - shows filter-bar Clear All when 1+ selected (Compare button only shows at 2+, Clear All is more lenient)
+  - init() updated: URL > localStorage precedence, auto-open modal via setTimeout(0) when state has 2-3 ids, invalid URL silently falls back (no error popup)
+- 	emplates/index.html (MC-314 additions):
+  - <button id="clear_all_btn"> in filter bar (between compare_btn and filter_count) - shown when 1+ selected
+  - <button id="cmp_share_btn"> in compare modal header - copies share URL to clipboard
+  - Inline onclick handlers wire to window.__compare.{clearCompare, copyShareLink} with safe if(window.__compare) guards
+- Tests:
+  - 	ests/test_mc314_share_url.js - 38 Node tests in 7 categories (parse, encode, URL, restore, clearURL, copy, init, wiring)
+  - 	ests/test_mc314_share_url.py - 17 pytest tests (8 static/file checks + 1 Flask render + 1 /static asset load + 1 /api/compare endpoint + 6 wrapper tests shelling out to Node)
+
+**Architecture notes:**
+- 3-level clipboard fallback keeps share link working on iOS Safari (no Clipboard API), older browsers (no Clipboard API), and restricted contexts (no prompt). The "Copied!" label vs "Copy URL below" indicates which path was used.
+- URL > localStorage precedence: if user lands on a shared link, URL wins; once they've interacted, their changes are mirrored to localStorage so back/forward navigation works.
+- Strict count check (2..MAX_SELECTED): a 4-id URL silently falls back rather than truncating. Sharing 4 listings should be a deliberate action, not a side effect of someone editing the URL.
+- setTimeout(0) in init() for auto-open: gives the DOM one microtask to mount, then opens the modal which fetches /api/compare independently. No race with loadDeals().
+- clearURLParam returns alse (not throws) when cmp is absent - so test contracts match user expectations (idempotent no-op).
+
+**Test coverage (38 JS + 17 Python = 55 tests, all passing):**
+- PASS parseSelectionString: empty/non-string returns []; 2 ids → array of 2; dedupes + caps at MAX_SELECTED
+- PASS encodeSelection: round-trip with parseSelectionString; filters non-strings + empty
+- PASS parseURLSelection: returns null when no cmp; [] when wrong count (1 or 4 ids); 2/3 ids valid; URL-decoded spaces; other params preserved
+- PASS restoreFromURL: returns false on invalid URL; returns false for 1-id URL; URL > localStorage; 3-id URL → 3 in state
+- PASS clearURLParam: strips cmp; keeps other params intact; returns false when no cmp param
+- PASS buildShareURL: includes cmp when 1+ selected; omits when 0 selected
+- PASS copyShareLink: returns 'ok' with clipboard API + succeeds; fallback when API unavailable; no throw on empty selection
+- PASS flashCopyButton: updates text + restores; 'prompt' label; captures originalText on first call
+- PASS updateClearAllButton: shows at 1+, hides at 0, shows at 2 with correct label; noop when button missing
+- PASS init: URL with 2 valid ids restores selection; silently falls back on invalid/missing/malformed URL
+- PASS index.html: contains clear_all_btn + cmp_share_btn in filter bar/modal; onclick handlers call correct API functions
+- PASS compare.js: exports all 10 new MC-314 functions
+- PASS Static asset checks (8 file-level + Flask / render + /static/compare.js load + /api/compare validation)
+- PASS flask test_client: / renders all 3 buttons, /static/compare.js includes new APIs
+
+**No regressions** (579 passed, 3 pre-existing unrelated failures from MC-309 audit):
+- test_mc255: 2 parking-caution diffs (pre-existing)
+- test_mc263: rate-limit timestamp (pre-existing)
+
+**Live verification (Flask test_client):**
+- GET / → 200, rendered HTML contains id="compare_btn", id="clear_all_btn", id="cmp_share_btn"
+- GET /static/compare.js → 200, contains all 10 MC-314 API functions
+- GET /api/compare (no ids) → 400 (validation still strict)
+- GET /api/compare?ids=a,b,c,d → 400 (validation still strict)
+- GET /api/compare?ids=only → 400 (validation still strict)
+- compare.js line count: 606 lines (was ~378 before MC-314, +228 lines for new MC-314 functions)
+- index.html line count: 1414 lines (was ~1407 before MC-314, +7 lines for the 2 new button elements with proper inline handlers)
+
+_(Updated: 2026-07-06 22:59 UTC)_
+
+---
+
+## MC-320 — Neighbourhood Standardization in find_deals.py (COMPLETE)
+
+**Gap:** MC-260 built `neighbourhood_lookup.py` with 158 official Toronto neighbourhoods + direct map for 80+ variants + fuzzy matching, but `find_deals.py` never imported or called it. Result: 24% of listings (271/1139) had `neighborhood="Toronto"` and 93% (1055/1139) had empty `region`. The deals CSV top rows were unhelpfully bucketed as just "Toronto" regardless of actual location.
+
+**What was built:**
+
+- `neighbourhood_lookup.py` new `standardize(raw_nbhd, title)` function:
+  - Step 1: direct lookup for specific inputs (e.g. "Liberty Village" → "University")
+  - Skip step 1 for generic inputs ("Toronto", "city of toronto", "toronto, on") to avoid fuzzy-noise matches
+  - Step 2: lookup on title (e.g. "1BR in King West" → "Niagara")
+  - Step 3: scan title for known neighbourhood hints (Yorkville, Annex, Leslieville, etc.)
+  - Returns: official name | "" (non-Toronto municipality) | None (no match — keep original)
+- `neighbourhood_lookup.py` `_DIRECT_MAP` extended with 21 common variants that were matching wrong neighborhoods via fuzzy: `king west → Niagara`, `dupont and dufferin → Dufferin Grove`, `junction area → Junction Area`, intersection-style strings ("Yonge and Eglinton" etc.)
+- `neighbourhood_lookup.py` `_TITLE_NEIGHBOURHOOD_HINTS` extended with 6 more hints including Yorkville, Rosedale, Summerhill
+- `find_deals.py` new `standardize_neighbourhoods(df)` helper: applies standardization per row, sets `region` column via `neighbourhood_to_region()`. In-place modification.
+- `find_deals.py` `main()`: new "Step 2.5: NEIGHBOURHOOD STANDARDIZATION" before scoring, prints counts of standardized/resolved/non-Toronto.
+- `backfill_mc320.py`: one-shot script that backfilled 376 active SQLite listings with standardized values.
+- Tests: `tests/test_mc320_neighborhood_standardization.py` — 34 tests in 4 classes (TestStandardizeFn 17, TestStandardizeNeighbourhoodsFn 9, TestRegionMapping 6, TestIntegrationWithExistingData 2).
+
+**Backfill results (data/listings.db):**
+- 376 active listings processed
+- 158 standardized (generic → specific via title fallback)
+- 120 region newly filled (was empty, now has region)
+- 21 still empty (non-Toronto municipalities — correct)
+- **Region coverage: 94.4% (up from 7%)**
+- 113 "Toronto" rows remain generic (their titles are empty — Craigslist search HTML doesn't include listing titles. Future: would need per-listing page fetch or address-level geocoding)
+
+**Top neighbourhoods after backfill:**
+| nbhd | count |
+|------|-------|
+| Toronto (still generic) | 113 |
+| Agincourt North | 63 |
+| Lansing-Westgate | 11 |
+| mississauga (non-TT) | 10 |
+| Bay Street Corridor | 10 |
+| DUPONT AND LANSDOWNE | 9 |
+| Kleinburg | 8 |
+| Birchcliffe-Cliffside | 7 |
+| city of toronto (still generic) | 5 |
+| Woburn | 5 |
+| Niagara | 4 |
+
+**Region distribution after backfill:**
+- Downtown: 226 (60%)
+- Scarborough: 81 (22%)
+- West End: 19 (5%)
+- North York: 13 (3%)
+- East End: 12 (3%)
+- Etobicoke: 4 (1%)
+- (empty): 21 (6% — non-Toronto, correctly excluded)
+
+**Tests:** 34 new MC-320 tests pass; all existing tests for touched modules pass (test_mc260_lookup.py 14/14, test_region_map.py 7/7, test_mc261_segment_fv.py 13/13, test_mc285.py 15/15, test_app.py 10/10, test_mc262_persist.py 10/10, test_mc316_source.py 27/27, test_mc319_pagination.py 37/37). Commit `6e3777e` on clean_build branch.
+
+_(Updated: 2026-07-07 11:10 UTC)_
