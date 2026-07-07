@@ -1021,7 +1021,7 @@ document.getElementById('hide_stale').addEventListener('change', function() {
 });
 
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region', 'source', 'max_subway'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
