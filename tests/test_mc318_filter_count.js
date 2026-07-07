@@ -72,15 +72,45 @@ test('index.html: wiring array still contains the original 6 filter ids', () => 
 
 test('index.html: updateFilterCount body already counts source + max_subway', () => {
   // AC: just adding the listener is not enough — updateFilterCount must
-  // also increment the count when those inputs are non-empty. Verify the
-  // pre-existing function body has these checks.
+  // also increment the count when those inputs are non-empty. We extract
+  // the function body (via regex), strip JS line-comments so commented-out
+  // lines don't satisfy the check, then assert BOTH 'source' and
+  // 'max_subway' have real increment statements inside it. NOT anywhere
+  // in the file.
+  //
+  // Earlier version did `html.includes('#source')`, which was true even
+  // when source only appeared in parseQueryParams / buildParams /
+  // resetFilters / event-listener wiring -- missing the actual bug where
+  // updateFilterCount body lacks the increment line.
   const html = fs.readFileSync(
     path.resolve(__dirname, '..', 'templates', 'index.html'), 'utf-8'
   );
-  assert.ok(html.includes("document.getElementById('source')"),
-    'updateFilterCount does not reference #source');
-  assert.ok(html.includes("document.getElementById('max_subway')"),
-    'updateFilterCount does not reference #max_subway');
+  // Extract just the updateFilterCount function body. Matches
+  // `function updateFilterCount() { ... }` (non-greedy on the closing
+  // brace). updateFilterCount has no internal braces so a simple regex
+  // works; if that ever changes, this test will surface the format drift
+  // with a clear error.
+  const bodyMatch = html.match(/function\s+updateFilterCount\s*\(\s*\)\s*\{[\s\S]*?\n\s*\}/);
+  assert.ok(bodyMatch,
+    'could not extract updateFilterCount function body -- format changed?');
+  // Strip JS line comments (// ...) AND block comments (/* ... */) so a
+  // commented-out `// if (...source...) count++` doesn't satisfy the
+  // increment regex below. Order matters: strip block comments first
+  // (otherwise a /* ... // ... */ block would have its // mis-stripped).
+  const stripBlockComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+  const stripLineComments = (s) => s.replace(/\/\/.*$/gm, '');
+  const body = stripLineComments(stripBlockComments(bodyMatch[0]));
+  // Real increment pattern: `if (document.getElementById('X').value) count++;`
+  // (or `.checked` for checkboxes). Require the pattern to be present
+  // AFTER comment-stripping so commented lines are excluded.
+  const sourceIncrementRe = /if\s*\(\s*document\.getElementById\(['"]source['"]\)\.value\s*\)\s*count\+\+/;
+  const maxSubwayIncrementRe = /if\s*\(\s*document\.getElementById\(['"]max_subway['"]\)\.value\s*\)\s*count\+\+/;
+  assert.ok(sourceIncrementRe.test(body),
+    'updateFilterCount body lacks `if (document.getElementById("source").value) count++` '
+    + '(badge will not increment when source filter changes)');
+  assert.ok(maxSubwayIncrementRe.test(body),
+    'updateFilterCount body lacks `if (document.getElementById("max_subway").value) count++` '
+    + '(badge will not increment when max_subway filter changes)');
 });
 
 // ── Test: simulated change event updates the badge ─────────────────────────

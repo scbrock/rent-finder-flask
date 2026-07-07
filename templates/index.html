@@ -734,6 +734,7 @@ function updateFilterCount() {
   if (document.getElementById('commute_dest').value.trim()) count++;
   if (document.getElementById('max_commute').value) count++;
   if (document.getElementById('max_subway').value) count++;
+  if (document.getElementById('source').value) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
