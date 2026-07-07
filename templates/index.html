@@ -84,6 +84,19 @@
                  font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
     .green-badge { background: #d4edda; color: #155724; padding: 1px 6px; border-radius: 8px;
                    font-size: 0.7rem; font-weight: 700; }
+
+    /* ── Days-listed badges (MC-324) ── distinct from age-badge since they
+         describe a different time anchor (first-seen-in-our-db vs
+         source-side activation date). Same color language: green=fresh,
+         yellow=medium, red=long-listed (potentially negotiable). */
+    .listed-badge {
+      display: inline-block; padding: 1px 7px; border-radius: 8px;
+      font-size: 0.72rem; font-weight: 700;
+    }
+    .listed-fresh { background: #d4edda; color: #155724; }     /* green: <= 7d in our DB */
+    .listed-medium { background: #fff3cd; color: #856404; }    /* yellow: 8-30d */
+    .listed-stale { background: #f8d7da; color: #721c24; }     /* red: > 30d */
+    .listed-neutral { background: #eee; color: #555; }         /* missing data */
     .new-tag { background: #c3f0ca; color: #0d5c26; padding: 1px 6px; border-radius: 8px;
                font-size: 0.7rem; font-weight: 700; margin-left: 4px; }
     /* MC-323: small inline count badge next to the "Only NEW" toggle label */
@@ -405,6 +418,8 @@
         <option value="price">Lowest Price</option>
         <option value="beds">Most Beds</option>
         <option value="days_ago">Freshest</option>
+        <!-- MC-324: sort by days_listed (longest-listed = potentially negotiable). -->
+        <option value="days_listed">Longest Listed</option>
       </select>
     </div>
 
@@ -581,6 +596,10 @@
         <th onclick="sortTable('pct')">% Under</th>
         <th onclick="sortTable('commute')" title="Walking commute time">↳ Min</th>
         <th onclick="sortTable('days_ago')">Age</th>
+        <!-- MC-324: Listed column shows how long the listing has been in our
+             data, distinct from "Age" (days since source-side activation date).
+             Useful as a stronger negotiable-price signal. -->
+        <th onclick="sortTable('days_listed')" title="Days since our scraper first saw this listing — longer = potentially negotiable">Listed</th>
         <th title="Walking time to nearest grocery store" style="white-space:nowrap;">🛒 Grocery</th>
         <th title="Walking time to nearest TTC station" style="white-space:nowrap;">🚇 TTC</th>
         <th title="Walking time to nearest parking lot" style="white-space:nowrap;">🚗 Parking</th>
@@ -1286,6 +1305,15 @@ function makeRowHtml(d) {
     const daysAgoClass = d.days_ago_class || 'age-neutral';
     const daysAgoStr = d.days_ago_str || (daysAgo !== null && daysAgo !== undefined ? daysAgo + 'd' : '—');
 
+    // MC-324: days_listed badge (color-coded: green <=7d, yellow 8-30d, red >30d).
+    // Distinct from days_ago (which is the source-side posting age): days_listed
+    // is how long our DB has tracked this listing.
+    const daysListed = (d.days_listed !== undefined && d.days_listed !== null) ? d.days_listed : null;
+    const daysListedClass = d.days_listed_class || (daysListed === null ? 'listed-neutral'
+      : (daysListed <= 7 ? 'listed-fresh' : daysListed <= 30 ? 'listed-medium' : 'listed-stale'));
+    const daysListedStr = d.days_listed_str || (daysListed === null ? '—'
+      : (daysListed === 0 ? 'today' : daysListed === 1 ? '1d listed' : `${daysListed}d listed`));
+
     // MC-252: May be stale warning badge (>30 days)
     const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">⚠️ Stale</span>' : '';
     // MC-264: NEW badge for listings first seen in the last 6 hours
@@ -1330,6 +1358,7 @@ function makeRowHtml(d) {
       <td class="${pctCls}" style="font-size:1rem;font-weight:700;"><strong>${pct}</strong></td>
       <td>${commute}</td>
       <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span></td>
+      <td><span class="listed-badge ${daysListedClass}">${daysListedStr}</span></td>
       <td>${groceryHtml}</td>
       <td>${ttcHtml}</td>
       <td>${parkingHtml}</td>

@@ -58,6 +58,66 @@ def _days_ago_class(days_ago: int) -> str:
     return 'age-stale'
 
 
+# MC-324: days_listed = how long this listing has been on the market.
+# Distinct from days_ago (which is "days since the activation/posting date
+# we saw on the source page"). days_listed is computed from first_seen in
+# SQLite (the durable "when did we first see this listing") and falls back
+# to days_ago when SQLite data is unavailable.
+#
+# Why a separate column: days_listed reflects how long the listing has been
+# competing for attention in our database. A listing posted 60 days ago but
+# only rediscovered by our scraper last week will have a low days_ago but
+# a high days_listed — useful for users who care about how long the unit has
+# actually been available, and a stronger signal for "potentially negotiable".
+from datetime import datetime, timezone
+
+def _days_listed_from_first_seen(first_seen_raw, now_utc=None):
+    """Compute integer days between first_seen ISO timestamp and now (UTC).
+    Returns None if first_seen is missing/unparseable, or if the result is
+    negative (data corruption guard)."""
+    if not first_seen_raw or str(first_seen_raw).strip() in ('', 'None', 'nan'):
+        return None
+    try:
+        # SQLite stores 'YYYY-MM-DDTHH:MM:SSZ' UTC
+        ts = str(first_seen_raw).strip()
+        if ts.endswith('Z'):
+            ts = ts[:-1] + '+00:00'
+        elif '+' not in ts and '-' not in ts[10:]:
+            # Naive timestamp — treat as UTC (consistent with persist.py storage)
+            ts = ts + '+00:00'
+        first_seen_dt = datetime.fromisoformat(ts)
+        now = now_utc or datetime.now(timezone.utc)
+        if first_seen_dt.tzinfo is None:
+            first_seen_dt = first_seen_dt.replace(tzinfo=timezone.utc)
+        delta_days = (now - first_seen_dt).days
+        # floor at 0 — a delta of -1 from a clock-skewed source means "today"
+        return max(0, delta_days)
+    except (ValueError, TypeError):
+        return None
+
+
+def _days_listed_str(days_listed) -> str:
+    """Human label for the days_listed column (e.g. "3d listed", "30d listed")."""
+    if days_listed is None:
+        return '—'
+    if days_listed == 0:
+        return 'today'
+    if days_listed == 1:
+        return '1d listed'
+    return f'{days_listed}d listed'
+
+
+def _days_listed_class(days_listed) -> str:
+    """CSS class for color coding: green <=7, yellow 8-30, red >30."""
+    if days_listed is None:
+        return 'listed-neutral'
+    if days_listed <= 7:
+        return 'listed-fresh'
+    if days_listed <= 30:
+        return 'listed-medium'
+    return 'listed-stale'
+
+
 # ---------------------------------------------------------------------------
 # MC-321: Neighborhood stats helpers (slugify, aggregation, lookup)
 # ---------------------------------------------------------------------------
@@ -366,6 +426,11 @@ def _normalize_row(r: dict) -> dict:
             'days_ago': days_ago,
             'days_ago_str': _days_ago_str(days_ago),
             'days_ago_class': _days_ago_class(days_ago),
+            # MC-324: days_listed — computed from first_seen (durable, SQLite-backed).
+            # Fall back to days_ago when first_seen isn't available (CSV path),
+            # so the field is always populated for active listings.
+            'days_listed': _days_listed_from_first_seen(r.get('first_seen'))
+                          if r.get('first_seen') else days_ago,
             'is_stale': is_stale,
             'is_new': is_new,
             'sqft': r.get('sqft', ''),
@@ -436,6 +501,10 @@ def _normalize_row(r: dict) -> dict:
             row_dict['parking_name'] = None
             row_dict['parking_walk_min'] = None
         row_dict['cautions'] = _compute_cautions(row_dict)
+        # MC-324: days_listed display helpers (after row_dict is assembled so
+        # the values are visible to _compute_cautions / sort handlers / UI).
+        row_dict['days_listed_str'] = _days_listed_str(row_dict.get('days_listed'))
+        row_dict['days_listed_class'] = _days_listed_class(row_dict.get('days_listed'))
         return row_dict
     except (ValueError, TypeError):
         return None
@@ -560,9 +629,29 @@ def api_deals():
         'beds': 'beds',
         'baths': 'baths',
         'days_ago': 'days_ago',
+        # MC-324: days_listed — sort by how long a listing has been on the
+        # market. The default UI label is "Longest Listed" so the natural
+        # default order (reverse=False) is HIGHEST days_listed first. We
+        # achieve this by sorting on a negated key when sort_by is days_listed.
+        'days_listed': 'days_listed',
     }
     key = key_map.get(sort_by, 'final_score')
-    deals.sort(key=lambda d: d.get(key, 0) if isinstance(d.get(key), (int, float)) else 0, reverse=reverse)
+
+    def _sort_key(d):
+        v = d.get(key)
+        if isinstance(v, (int, float)):
+            return v
+        # Missing data → -1 so it sorts last regardless of direction.
+        return -1
+
+    if key == 'days_listed':
+        # AC3: asc = longest-listed first. Sort on negated days_listed with
+        # reverse=False to get the highest days_listed at index 0.
+        # To switch to "newest listed first", we'd add an explicit ?order= param
+        # later; for now the default UX matches "Longest Listed".
+        deals.sort(key=lambda d: -(_sort_key(d) if _sort_key(d) >= 0 else 1), reverse=False)
+    else:
+        deals.sort(key=_sort_key, reverse=reverse)
 
     # MC-261: segment-aware fair value (relative to filtered search results)
     if deals:
