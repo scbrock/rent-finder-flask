@@ -584,6 +584,26 @@ def _normalize_row(r: dict) -> dict:
         return None
 
 
+def _get_neighborhood_trends_safe(deals: list) -> dict:
+    """
+    MC-329: Compute the neighbourhood_trends map for the sidebar / /api/meta
+    payload. Wraps get_neighborhood_trends_batch in try/except so a DB hiccup
+    surfaces as an empty dict rather than 500-ing /api/meta.
+    """
+    try:
+        unique = sorted({
+            (d.get('neighbourhood') or '').strip()
+            for d in deals
+            if (d.get('neighbourhood') or '').strip()
+        })
+        if not unique:
+            return {}
+        from persist import get_neighborhood_trends_batch
+        return get_neighborhood_trends_batch(unique, days=30)
+    except Exception:
+        return {}
+
+
 def load_deals():
     """
     Load active listings from SQLite (MC-262), falling back to CSV.
@@ -840,6 +860,32 @@ def api_deals():
     page = deals[offset:offset + limit]
     has_more = (offset + len(page)) < total
 
+    # MC-329: Attach neighborhood_trend to each deal row. One batch call
+    # covers all unique neighborhoods in the FULL filtered set (not just
+    # the current page) so the UI trend data is stable across pagination.
+    # Neighbourhoods with <2 days of price_history are silently absent
+    # from the trends map; rows for those neighborhoods get neighborhood_trend
+    # set to None (no badge rendered in the UI).
+    try:
+        unique_neighborhoods = sorted({
+            (d.get('neighbourhood') or '').strip()
+            for d in deals
+            if (d.get('neighbourhood') or '').strip()
+        })
+        if unique_neighborhoods:
+            from persist import get_neighborhood_trends_batch
+            trends_map = get_neighborhood_trends_batch(unique_neighborhoods, days=30)
+        else:
+            trends_map = {}
+        for d in page:
+            nbhd = (d.get('neighbourhood') or '').strip()
+            d['neighborhood_trend'] = trends_map.get(nbhd)   # None if not enough data
+    except Exception as _e:
+        # Persistence layer error must not 500 the request -- degrade
+        # gracefully (all rows get None, badge is silently hidden).
+        for d in page:
+            d['neighborhood_trend'] = None
+
     return jsonify({
         'deals': page,
         'total': total,
@@ -929,6 +975,11 @@ def api_meta():
         'new_count': new_count,
         'price_drop_count': price_drop_count,
         'price_per_sqft_stats': price_per_sqft_stats,
+        # MC-329: Per-neighbourhood 30-day price-trend map. Same shape as
+        # the field added to each /api/deals row. Neighbourhoods without
+        # >=2 days of price_history are absent from the map; the UI can
+        # iterate neighborhoods and look up trends_map[name].
+        'neighborhood_trends': _get_neighborhood_trends_safe(deals),
     })
 
 

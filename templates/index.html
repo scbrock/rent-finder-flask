@@ -131,6 +131,22 @@
     .pps-expensive { background: #ffe0e0; color: #8b1a1a; } /* > $4.50/sqft: red */
     .pps-na { color: #aaa; font-style: italic; font-size: 0.85rem; }
 
+    /* MC-329: Neighbourhood price-trend badge (inline next to neighbourhood name) */
+    .nbhd-trend-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      margin-left: 4px;
+      border-radius: 8px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      vertical-align: middle;
+      cursor: help; /* tooltip on hover via title attr */
+    }
+    .nbhd-trend-up   { background: #ffe0e0; color: #b00020; border: 1px solid #ffc1c1; }
+    .nbhd-trend-down { background: #d8f0d8; color: #2d6a4f; border: 1px solid #b8e0c2; }
+    .nbhd-trend-flat { background: #e6e8eb; color: #6c7a89; border: 1px solid #d0d4d9; }
+
     /* ── Cautions column (MC-255) ── */
     .cautions-cell { min-width: 160px; }
     .caution-chip {
@@ -1406,7 +1422,30 @@ function makeRowHtml(d) {
     const priceDropTag = (d.price_dropped === true && d.price_drop_pct != null)
         ? `<span class="price-drop-badge" title="Was $${d.price_drop_from_price} (${d.price_drop_days_ago}d ago)">📉 ↓${d.price_drop_pct}%</span>`
         : '';
-    // MC-316: Source badge (Kijiji / Craigslist)
+    // MC-329: Neighbourhood price-trend badge (inline next to neighbourhood name).
+// Renders nothing if neighborhood_trend is missing (<2 days of history)
+// or malformed. Color-coded by direction: up = prices rising, down =
+// prices falling, flat = within ±2%. Tooltip shows the exact pct_change
+// and the day-window over which it was computed.
+function _renderNbhdTrendBadge(trend) {
+  if (!trend || typeof trend !== 'object') return '';
+  const dir = trend.direction;
+  const pct = Number(trend.pct_change);
+  const days = trend.days_of_data;
+  const win = trend.window_days;
+  if (!['up', 'down', 'flat'].includes(dir)) return '';
+  if (!isFinite(pct)) return '';
+  const arrow = dir === 'up' ? 'UP' : (dir === 'down' ? 'DN' : 'FLAT');
+  const cls = `nbhd-trend-${dir}`;
+  const pctStr = (Math.abs(pct) * 100).toFixed(1) + '%';
+  const tip = `Neighbourhood 30-day trend: ${dir} ${pctStr}`
+           + (days ? ` (over ${days} day${days === 1 ? '' : 's'}` : '')
+           + (win ? `, window=${win}d` : '') + ')';
+  return `<span class="nbhd-trend-badge ${cls}" title="${tip}">`
+       + `${arrow} ${pctStr}</span>`;
+}
+
+// MC-316: Source badge (Kijiji / Craigslist)
     const srcRaw = (d.source || '').toLowerCase();
     const srcLabel = srcRaw === 'kijiji' ? 'Kijiji' : srcRaw === 'craigslist' ? 'CL' : '';
     const srcClass = srcRaw === 'kijiji' ? 'source-kijiji' : srcRaw === 'craigslist' ? 'source-cl' : '';
@@ -1437,7 +1476,7 @@ function makeRowHtml(d) {
         }
         return '<div class="deal-thumb-fallback">🏠</div>';
       })()}</td>
-      <td><strong>${d.neighbourhood || '-'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${priceDropTag} ${srcTag}${d.neighborhood_slug ? ` <a href="/neighborhood/${encodeURIComponent(d.neighborhood_slug)}" target="_blank" rel="noopener" class="nbhd-stats-link" title="View neighbourhood stats in a new tab">📊</a>` : ''}</td>
+      <td><strong>${d.neighbourhood || '-'}</strong> ${_renderNbhdTrendBadge(d.neighborhood_trend)} ${parkingIcon} ${staleTag} ${newTag} ${priceDropTag} ${srcTag}${d.neighborhood_slug ? ` <a href="/neighborhood/${encodeURIComponent(d.neighborhood_slug)}" target="_blank" rel="noopener" class="nbhd-stats-link" title="View neighbourhood stats in a new tab">📊</a>` : ''}</td>
       <td>${d.region || '-'}</td>
       <td>${beds}</td>
       <td>${baths}</td>

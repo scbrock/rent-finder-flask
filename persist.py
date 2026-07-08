@@ -2159,6 +2159,131 @@ def _median_of(values: list) -> Optional[float]:
     return float((s[n // 2 - 1] + s[n // 2]) / 2)
 
 
+def get_neighborhood_trends_batch(
+    neighborhoods: list[str],
+    days: int = 30,
+    now_ts: Optional[str] = None,
+    flat_threshold: float = 0.02,
+) -> dict:
+    """
+    MC-329: Batch neighbourhood price-trend computation. One SQL query,
+    one Python pass. Returns {neighborhood: {direction, pct_change,
+    days_of_data}} for each neighbourhood that has >= 2 distinct days of
+    price history in the window. Neighbourhoods with < 2 days are
+    OMITTED from the result (caller should treat absence as "no trend").
+
+    direction:
+      "up"   : pct_change > +flat_threshold (default > +2%)
+      "down" : pct_change < -flat_threshold (default < -2%)
+      "flat" : otherwise
+
+    pct_change:
+      (latest_median - earliest_median) / earliest_median, as a fraction
+      (e.g. -0.05 = -5%).
+
+    days_of_data:
+      count of distinct UTC days in [now - days, now] with >= 1 price
+      row for an active listing in this neighbourhood.
+
+    Implementation notes:
+      - One SQL query: pull (neighbourhood, seen_at, price) for all
+        active listings of the given neighbourhood set, in window.
+      - Bucket by (neighbourhood, UTC date) in Python, take per-day
+        median.
+      - Sort each neighbourhood's per-day medians ascending, take
+        earliest vs latest for the pct_change comparison.
+
+    Caveats (mirroring get_neighborhood_price_history):
+      - The neighbourhood name match is case-insensitive.
+      - Listings with NULL or non-positive price are skipped (defensive).
+      - now_ts is exposed for tests that need deterministic date math.
+      - An empty `neighborhoods` list short-circuits to {} without
+        touching the DB.
+    """
+    if not neighborhoods:
+        return {}
+    import datetime as _dt
+    if now_ts:
+        now_dt = _dt.datetime.strptime(now_ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=_dt.timezone.utc,
+        )
+    else:
+        now_dt = datetime.now(timezone.utc)
+    cutoff = (now_dt - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Build a case-insensitive IN clause. SQLite handles case-insensitive
+    # equality via lower() comparisons, but we don't need that here -- the
+    # listings table stores the canonical spelling, so a plain equality on
+    # lower(neighbourhood) IN (?, ?, ...) works and avoids a per-row lower().
+    placeholders = ",".join("?" * len(neighborhoods))
+    lower_neighborhoods = [n.strip() for n in neighborhoods if n and n.strip()]
+
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT l.neighborhood, ph.seen_at, ph.price
+            FROM price_history ph
+            JOIN listings l ON l.listing_id = ph.listing_id
+            WHERE l.is_active = 1
+              AND l.neighborhood IS NOT NULL
+              AND l.neighborhood IN ({placeholders})
+              AND ph.seen_at >= ?
+            ORDER BY ph.seen_at ASC
+            """,
+            (*lower_neighborhoods, cutoff),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Bucket: nbhd -> date -> list[price]
+    buckets: dict = {}
+    for neighborhood, seen_at, price in rows:
+        if not neighborhood or not seen_at:
+            continue
+        if price is None:
+            continue
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            continue
+        if p <= 0:
+            continue
+        day = seen_at[:10]
+        if len(day) < 10:
+            continue
+        buckets.setdefault(neighborhood, {}).setdefault(day, []).append(p)
+
+    # Compute trend per neighbourhood.
+    out: dict = {}
+    for neighborhood, days_map in buckets.items():
+        days_sorted = sorted(days_map.keys())
+        if len(days_sorted) < 2:
+            continue   # not enough data -- omitted from result
+        earliest_median = _median_of(days_map[days_sorted[0]])
+        latest_median = _median_of(days_map[days_sorted[-1]])
+        if earliest_median is None or latest_median is None or earliest_median <= 0:
+            continue
+        pct_change = (latest_median - earliest_median) / earliest_median
+        if pct_change > flat_threshold:
+            direction = "up"
+        elif pct_change < -flat_threshold:
+            direction = "down"
+        else:
+            direction = "flat"
+        out[neighborhood] = {
+            "direction": direction,
+            "pct_change": round(pct_change, 4),
+            "days_of_data": len(days_sorted),
+            "earliest_date": days_sorted[0],
+            "latest_date": days_sorted[-1],
+            "earliest_median": round(earliest_median, 2),
+            "latest_median": round(latest_median, 2),
+            "window_days": days,
+        }
+    return out
+
+
 def seed_price_history_for_listing(listing_id: str, price: float, seen_at: str) -> bool:
     """
     MC-325: Insert a single price_history row. Returns True if the row was
