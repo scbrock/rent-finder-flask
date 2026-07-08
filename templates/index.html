@@ -491,6 +491,15 @@
       <span>📉 Price Drop <span id="price_drop_count">(...)</span></span>
     </label>
 
+    <!-- With photos only toggle (MC-332): surface only listings that have at
+         least one usable photo URL (image_url or image_urls[0]). Skips the
+         CL listings that don't yet have a cached thumbnail so the table isn't
+         dominated by emoji placeholders. Count badge from /api/meta.with_photos_count. -->
+    <label class="toggle-btn" id="has_image_toggle" title="Show only listings that have at least one photo">
+      <input type="checkbox" id="has_image">
+      <span>📷 With photos only <span id="has_image_count">(...)</span></span>
+    </label>
+
     <div style="display:flex;gap:6px;align-items:flex-end;">
       <button id="filter_apply" onclick="loadDeals()">Filter</button>
       <button id="filter_reset" onclick="resetFilters()">Reset</button>
@@ -842,6 +851,11 @@ function parseQueryParams() {
     document.getElementById('price_dropped').checked = true;
     document.getElementById('price_drop_toggle').classList.add('active');
   }
+  // MC-332: round-trip has_image from URL into the With photos only toggle.
+  if (params.get('has_image') === 'true') {
+    document.getElementById('has_image').checked = true;
+    document.getElementById('has_image_toggle').classList.add('active');
+  }
   updateFilterCount();
 }
 
@@ -885,6 +899,11 @@ function applySavedFilters(filters) {
   if (filters.price_dropped === 'true' || filters.price_dropped === true) {
     document.getElementById('price_dropped').checked = true;
     document.getElementById('price_drop_toggle').classList.add('active');
+  }
+  // MC-332: saved-searches Load parity for the With photos only toggle.
+  if (filters.has_image === 'true' || filters.has_image === true) {
+    document.getElementById('has_image').checked = true;
+    document.getElementById('has_image_toggle').classList.add('active');
   }
   updateFilterCount();
   return true;
@@ -1043,6 +1062,7 @@ function buildParams() {
   const hideStale = document.getElementById('hide_stale').checked;
   const onlyNew = document.getElementById('only_new').checked;
   const priceDropped = document.getElementById('price_dropped').checked;
+  const hasImage = document.getElementById('has_image').checked;
 
   if (bedsMin) params.set('beds_min', bedsMin);
   if (bathsMin) params.set('baths_min', bathsMin);
@@ -1058,6 +1078,8 @@ function buildParams() {
   if (onlyNew) params.set('is_new', 'true');
   // MC-325: Price Drop filter - round-trip with parseQueryParams/applySavedFilters.
   if (priceDropped) params.set('price_dropped', 'true');
+  // MC-332: With photos only filter - round-trip with parseQueryParams/applySavedFilters.
+  if (hasImage) params.set('has_image', 'true');
 
   const commuteDest = document.getElementById('commute_dest').value.trim();
   const maxCommute = document.getElementById('max_commute').value;
@@ -1094,6 +1116,8 @@ function updateFilterCount() {
   if (document.getElementById('price_dropped').checked) count++;
   // MC-327: Max $/sqft cap counts as one active filter when set.
   if (document.getElementById('max_price_per_sqft').value) count++;
+  // MC-332: With photos only toggle counts as one active filter when checked.
+  if (document.getElementById('has_image').checked) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -1122,6 +1146,9 @@ function resetFilters() {
   // MC-325: clear the Price Drop toggle along with all other filters
   document.getElementById('price_dropped').checked = false;
   document.getElementById('price_drop_toggle').classList.remove('active');
+  // MC-332: clear the With photos only toggle along with all other filters.
+  document.getElementById('has_image').checked = false;
+  document.getElementById('has_image_toggle').classList.remove('active');
   document.getElementById('commute_dest').value = '';
   document.getElementById('max_commute').value = '';
   document.getElementById('max_subway').value = '';
@@ -1568,8 +1595,14 @@ document.getElementById('price_dropped').addEventListener('change', function() {
   updateFilterCount();
 });
 
+// MC-332: With photos only toggle styling - mirrors the Only NEW pattern.
+document.getElementById('has_image').addEventListener('change', function() {
+  document.getElementById('has_image_toggle').classList.toggle('active', this.checked);
+  updateFilterCount();
+});
+
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped', 'has_image'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
@@ -1581,6 +1614,7 @@ loadShortlistStatus();
 loadSimilarShortlist();  // MC-274: "You might also like" for users with shortlisted listings
 loadNewCountBadge();     // MC-323: populate the "(N new)" hint next to the Only NEW toggle
 loadPriceDropCountBadge();  // MC-325: populate the "(N drops)" hint next to the Price Drop toggle
+loadHasImageCountBadge();  // MC-332: populate the "(N photos)" hint next to the With photos only toggle
 loadDeals();
 
 // MC-323: Fetch /api/meta.new_count and render "(N new)" next to the Only NEW
@@ -1611,6 +1645,22 @@ async function loadPriceDropCountBadge() {
     const data = await resp.json();
     const n = (data && typeof data.price_drop_count === 'number') ? data.price_drop_count : 0;
     el.textContent = '(' + n + ' drops)';
+  } catch(e) {
+    el.textContent = '-';
+  }
+}
+
+// MC-332: Fetch /api/meta.with_photos_count and render "(N photos)" next to
+// the With photos only toggle label. Same fail-silent pattern.
+async function loadHasImageCountBadge() {
+  const el = document.getElementById('has_image_count');
+  if (!el) return;
+  try {
+    const resp = await fetch('/api/meta');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const n = (data && typeof data.with_photos_count === 'number') ? data.with_photos_count : 0;
+    el.textContent = '(' + n + ' photos)';
   } catch(e) {
     el.textContent = '-';
   }

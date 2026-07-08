@@ -575,6 +575,15 @@ def _normalize_row(r: dict) -> dict:
         # the values are visible to _compute_cautions / sort handlers / UI).
         row_dict['days_listed_str'] = _days_listed_str(row_dict.get('days_listed'))
         row_dict['days_listed_class'] = _days_listed_class(row_dict.get('days_listed'))
+        # MC-332: has_image boolean — True iff this row has at least one usable
+        # photo URL (image_url non-empty OR image_urls list has any http URL).
+        # Drives the "With photos only" filter and the With photos count in
+        # /api/meta. Empty strings, None, and non-http URLs are all rejected so
+        # junk like "" or "javascript:..." never get a True.
+        _single = (row_dict.get('image_url') or '').strip()
+        _multi = row_dict.get('image_urls') or []
+        _has_multi = any(isinstance(u, str) and u.strip().startswith('http') for u in _multi)
+        row_dict['has_image'] = bool(_single) or _has_multi
         # MC-327: $/sqft display helpers (str for the cell, class for colour).
         _pps = row_dict.get('price_per_sqft')
         row_dict['price_per_sqft_str'] = _price_per_sqft_str(_pps)
@@ -744,6 +753,11 @@ def api_deals():
         max_price_per_sqft = float(request.args.get('price_per_sqft_max', '') or '')
     except (TypeError, ValueError):
         max_price_per_sqft = None
+    # MC-332: With-photos filter. Accepts the same truthy values as the
+    # only_new / price_dropped filters for consistency. Missing / empty /
+    # false = no filter (all rows returned, regardless of photo presence).
+    has_image_raw = (request.args.get('has_image', '') or '').strip().lower()
+    has_image = has_image_raw in ('true', '1', 'yes')
 
     # Apply filters
     if beds_min is not None:
@@ -781,6 +795,12 @@ def api_deals():
         deals = [d for d in deals
                  if d.get('price_per_sqft') is not None
                  and d['price_per_sqft'] <= max_price_per_sqft]
+    # MC-332: With-photos filter. Only applied on explicit truthy value so
+    # GET /api/deals (no param) returns the full row set unchanged. Uses the
+    # has_image flag computed in _normalize_row (True iff any usable photo
+    # URL exists). Combines cleanly with source/is_new/price_dropped/etc.
+    if has_image:
+        deals = [d for d in deals if d.get('has_image', False) is True]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
@@ -903,10 +923,12 @@ def api_meta():
         return jsonify({
             'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [],
             'neighborhoods': [], 'new_count': 0, 'price_drop_count': 0,
+            'with_photos_count': 0,
             'price_per_sqft_stats': {
                 'count_with_sqft': 0, 'count_without_sqft': 0,
                 'min': None, 'max': None, 'median': None, 'p25': None, 'p75': None,
             },
+            'neighborhood_trends': {},
         })
 
     beds_vals = sorted(set(d['beds'] for d in deals if d['beds'] is not None))
@@ -925,6 +947,12 @@ def api_meta():
     # (default 5% threshold). Used by the UI to render a "(N drops)" badge
     # next to the Price Drop toggle so users see the total at a glance.
     price_drop_count = sum(1 for d in deals if d.get('price_dropped', False) is True)
+    # MC-332: Count of listings with at least one usable photo. Computed over
+    # the full data set (no other filters applied) so the UI badge reflects
+    # the universe of photo-bearing listings, not whatever the user has
+    # already narrowed down. Uses has_image from _normalize_row so the count
+    # matches what ?has_image=true would include.
+    with_photos_count = sum(1 for d in deals if d.get('has_image', False) is True)
     # MC-327: $/sqft distribution stats. Computed over ALL listings (not just
     # the filtered set returned by /api/deals) so the UI can render a max-$/sqft
     # slider with sensible bounds. Null price_per_sqft rows are excluded from
@@ -974,6 +1002,9 @@ def api_meta():
         'neighborhoods': neighborhoods,
         'new_count': new_count,
         'price_drop_count': price_drop_count,
+        # MC-332: Photo-bearing listing total. Drives the "(N photos)" hint
+        # next to the new "With photos only" toggle in the filter bar.
+        'with_photos_count': with_photos_count,
         'price_per_sqft_stats': price_per_sqft_stats,
         # MC-329: Per-neighbourhood 30-day price-trend map. Same shape as
         # the field added to each /api/deals row. Neighbourhoods without
