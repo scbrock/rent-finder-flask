@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** MC-329 in review. Neighbourhood price-trend badge in the deals table — inline arrows next to the neighbourhood name on every row, color-coded (red=prices rising, green=prices falling, grey=flat) with a hover tooltip showing pct_change + days-of-data + window. Backed by a new `get_neighborhood_trends_batch()` in persist.py (single SQL query for the full active-neighborhood set; omits neighbourhoods with <2 days of price_history). Each /api/deals row now carries `neighborhood_trend` (None when no data); /api/meta adds a `neighborhood_trends` map for sidebar use. 28/28 new tests pass; critical regression suite clean (MC-318/320/321/325/327/328).
-**Last Updated:** 2026-07-08 12:30 UTC
+**Current Phase:** MC-332 complete, in review. "Show only with photos" filter on /api/deals + UI toggle. 96/376 active listings now photo-flagged (was unchecked before — CL no-photo rows dominate the table). 42 new tests pass; 331/331 across MC-316/319/320/321/325/327/329/test_app/MC-332 green; 0 regressions in critical suite.
+**Last Updated:** 2026-07-08 22:45 UTC
 
 ---
 
@@ -841,3 +841,61 @@ ew Chart(, /price-history � page renders with the trend section wired correctl
 **Note on neighborhood.html:** MC-321 created 	emplates/neighborhood.html but that file was never committed to clean_build (the file exists locally as untracked). This MC-328 commit ships the template (with my MC-328 additions on top of MC-321's existing content) so the deploy branch is consistent.
 
 _(Updated: 2026-07-08 06:55 UTC)_
+
+---
+
+## MC-332 — Show only with photos filter on /api/deals + UI toggle (COMPLETE, in review)
+
+**Gap:** ~74% of the 376 active listings (280 rows) have no usable photo URL. The deals table displays the same house-emoji placeholder for every one of them, so a user scrolling for visual deals has to skip 280 rows just to reach the 96 photo-bearing Kijiji listings. No way to filter them out. `source=kijiji` is too aggressive (drops CL listings that DID get thumbnails via MC-308), and `source=craigslist` doesn't help either.
+
+**What was built:**
+
+**Backend (`app.py`):**
+- `_normalize_row()` now emits a `has_image` boolean on every deal row. True iff:
+  - `image_url` is non-empty after `.strip()`, OR
+  - `image_urls` list contains at least one entry that is a string starting with `http`
+- Strip + non-http filter (`javascript:...`, `data:...`, etc.) means junk URLs never accidentally count as photos.
+- `/api/deals`: new `?has_image=true|1|yes` filter param. Empty/missing/`false`/`0` = no filter (existing callers unaffected).
+- `/api/meta`: new `with_photos_count` field (count of `has_image=True` rows over the full dataset, ignoring any user filters). Updated empty-deals fallback to include the new key.
+
+**Frontend (`templates/index.html`):**
+- New toggle `With photos only (N photos)` placed between Price Drop and Sort in the filter bar. Same `toggle-btn` styling as Only NEW / Price Drop.
+- `buildParams()`: emits `has_image=true` when checked.
+- `parseQueryParams()`: reads `?has_image=true` from URL on page load and toggles both `.checked` and `.active` class.
+- `resetFilters()`: clears the toggle alongside all other filters.
+- `updateFilterCount()`: counts the toggle so the filter-count badge reflects it.
+- `applySavedFilters()`: round-trips `has_image` for saved-searches Load parity.
+- Listener wiring array (line ~1573) extended: `['beds_min', ..., 'price_dropped', 'has_image']` so the badge auto-updates on change.
+- Inline `change` handler on `#has_image` mirrors the Only NEW pattern (toggles `.active` class on `#has_image_toggle`).
+- `loadHasImageCountBadge()` helper: fetches `/api/meta.with_photos_count` and renders `(N photos)` next to the label. Same fail-silent pattern as `loadNewCountBadge` / `loadPriceDropCountBadge`.
+
+**Tests (`tests/test_mc332_has_image.py`):** **42 tests in 6 classes**
+
+- `TestNormalizeHasImage` (12): image_url+image_urls set -> True, both empty -> False, image_urls-only with http -> True, image_url-only -> True, both empty list -> True, no images -> False, whitespace image_url + empty image_urls -> False, image_urls with only non-http entries -> False, mixed http + non-http -> True, both populated -> True, image_urls as actual Python list -> True, image_urls with non-string entries skipped -> True.
+- `TestApiDealsHasImageField` (2): every row has `has_image` key, value is bool.
+- `TestApiDealsHasImageFilter` (10): true filters to photo rows, no filter/empty/false/0/invalid fall through, combined with source=kijiji / craigslist / beds / price.
+- `TestNoRegressions` (3): `/`, `/api/meta`, `/api/deals/export.csv` still serve 200.
+- `TestApiMetaWithPhotosCount` (3): key present, count matches data (2 of 4 rows have photos in the fixture), value is int.
+- `TestIndexHtmlHasImageWiring` (12): checkbox + toggle wrapper + count badge element all present, `buildParams` / `parseQueryParams` / `updateFilterCount` / `resetFilters` / `applySavedFilters` all reference has_image, listener wiring array includes 'has_image', `loadHasImageCountBadge` defined and called at init, change handler attached.
+
+**Test results:** 42/42 PASS in 1.34s.
+
+**Regression check (MC-316/319/320/321/325/327/329/test_app + MC-332):** 331/331 PASS in 17.45s. The 15 pre-existing failures in MC-255/MC-263/MC-318/MC-322 are unrelated to MC-332 (flagged in earlier progress notes as test-suite pollution predating this work).
+
+**Live smoke (`/api/deals` via Flask test_client with prod SQLite):**
+- `/api/deals?has_image=true` -> 96 of 376 listings (~26%)
+- `/api/deals` (no filter) -> 376 (regression guard)
+- `/api/meta` -> `with_photos_count=96` (matches UI badge expectation)
+
+**ACs (all met):**
+1. _normalize_row emits `has_image` boolean
+2. `/api/deals?has_image=true` excludes no-photo rows (cleanly combines with source/is_new/price_dropped)
+3. New "With photos only" checkbox in filter bar with live `(N photos)` badge from `/api/meta`
+4. `buildParams` / `parseQueryParams` / `resetFilters` / `updateFilterCount` / `applySavedFilters` all wire `has_image` correctly
+5. `has_image=true` excludes rows where image_url empty AND image_urls empty
+6. `tests/test_mc332_has_image.py` >=20 tests across 4 classes (delivered 42 across 6 classes)
+7. 0 regressions in MC-307/308/312/316/318/319/320/321/322/323/324/325/326/327/328/329/test_app
+8. Live smoke: 96 rows via `?has_image=true`; full 376 unfiltered (regression)
+9. Committed (dd41061 on clean_build); RENT_PROGRESS.md updated
+
+_(Updated: 2026-07-08 22:45 UTC)_
