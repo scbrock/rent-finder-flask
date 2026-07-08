@@ -366,7 +366,57 @@ class TestSavedSearchMatchQuery:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCheckAndSendSavedSearchAlerts:
-    """End-to-end worker: walks subscribe list, applies rate limit, sends email."""
+    """End-to-end worker: walks subscribe list, applies rate limit, sends email.
+
+    Timestamps in this class are RELATIVE TO A FROZEN REFERENCE INSTANT
+    (`_FAKE_NOW`), not wall-clock time. The autouse `_stub_datetime_now`
+    fixture replaces `persist.datetime.now(timezone.utc)` with that frozen
+    instant, and seeds use `_now_minus(hours)` to generate first_seen +
+    last_notification_sent strings relative to it. This keeps the 24h
+    fallback window and the 24h rate-limit check mutually consistent and
+    makes the tests time-stable (passed reliably when run today, next
+    week, or next month) — fixing the bug where 4 tests were silently
+    failing because the originally-hardcoded '2026-07-07T05:00:00Z'
+    timestamps had aged past the 24h window.
+    """
+
+    # Frozen reference "now" for this class. Picked deliberately distinct
+    # from any wall-clock date so the tests never accidentally drift out
+    # of window during a CI run.
+    _FAKE_NOW = datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _now_minus(self, hours: int) -> str:
+        """ISO-format timestamp `hours` before `_FAKE_NOW`, in the same
+        '%Y-%m-%dT%H:%M:%SZ' format that `_seed_listing` and the worker
+        both expect."""
+        return (self._FAKE_NOW - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @pytest.fixture(autouse=True)
+    def _stub_datetime_now(self, monkeypatch):
+        """Stub `persist.datetime` with a subclass whose `.now()` returns
+        a fixed `_FAKE_NOW`. Applied automatically to every test in this
+        class — does not touch any other test in the file.
+
+        We replace the module-level `datetime` binding in the persist
+        namespace rather than `datetime.now` on the immutable C class
+        (which raises TypeError). Anything in persist.py that calls
+        `datetime.now(...)`, `datetime.strptime(...)`, or
+        `datetime(...)` keeps working because `_FrozenDateTime` inherits
+        all of those from `datetime.datetime`.
+        """
+        import persist
+        import datetime as _real_dt
+
+        fixed = self._FAKE_NOW  # captured at fixture time
+
+        class _FrozenDateTime(_real_dt.datetime):
+            """datetime subclass with a frozen .now() — every call returns
+            the same `fixed` reference instant."""
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz is not None else fixed
+
+        monkeypatch.setattr(persist, "datetime", _FrozenDateTime)
 
     def _make_sender(self):
         calls = []
@@ -379,13 +429,16 @@ class TestCheckAndSendSavedSearchAlerts:
     def test_sends_email_for_one_subscribed_search_with_matches(self, isolated_db):
         import persist
         persist.init_db()
-        _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
+        # 1h before frozen now — within the 24h fallback window.
+        _seed_listing(persist, "L1", first_seen=self._now_minus(1))
         persist.upsert_saved_search(
             email="u@x.com", name="downtown-1br",
             beds_min=1.0, region="Downtown", notify_on_match=True,
         )
         send = self._make_sender()
-        # Stub time so the worker's `now` matches the listing's first_seen.
+        # The autouse fixture ensures persist.datetime.now == self._FAKE_NOW,
+        # so the worker's 'now' and our seed 'first_seen' stay mutually
+        # consistent regardless of when the test is run.
         result = persist.check_and_send_saved_search_alerts(
             min_hours_between=24, send_fn=send,
         )
@@ -406,7 +459,7 @@ class TestCheckAndSendSavedSearchAlerts:
         """Searches with notify_on_match=0 are not touched."""
         import persist
         persist.init_db()
-        _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
+        _seed_listing(persist, "L1", first_seen=self._now_minus(1))
         persist.upsert_saved_search(
             email="u@x.com", name="off",
             beds_min=1.0, region="Downtown",
@@ -422,7 +475,8 @@ class TestCheckAndSendSavedSearchAlerts:
         """A subscribed search that has no matches in the window is skipped silently."""
         import persist
         persist.init_db()
-        _seed_listing(persist, "old", first_seen="2026-07-01T05:00:00Z")  # 6d before NOW
+        # 1 week before frozen now — well outside the 24h fallback window.
+        _seed_listing(persist, "old", first_seen=self._now_minus(24 * 7))
         persist.upsert_saved_search(
             email="u@x.com", name="recent",
             beds_min=1.0, region="Downtown", notify_on_match=True,
@@ -437,14 +491,15 @@ class TestCheckAndSendSavedSearchAlerts:
         """A search notified <24h ago is skipped."""
         import persist
         persist.init_db()
-        _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
+        _seed_listing(persist, "L1", first_seen=self._now_minus(1))
         persist.upsert_saved_search(
             email="u@x.com", name="repeat",
             beds_min=1.0, region="Downtown", notify_on_match=True,
         )
         # Stamp with a recent timestamp (within the 24h window).
-        from datetime import datetime, timezone, timedelta
-        recent = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Uses the same frozen reference so the worker's `now - last_dt`
+        # calc stays consistent on every run.
+        recent = self._now_minus(2)
         conn = persist._get_conn()
         conn.execute(
             "UPDATE saved_searches SET last_notification_sent = ? WHERE name = 'repeat'",
@@ -463,8 +518,8 @@ class TestCheckAndSendSavedSearchAlerts:
         """Each subscribed search gets its own send() call with its name."""
         import persist
         persist.init_db()
-        _seed_listing(persist, "L_downtown", first_seen="2026-07-07T05:00:00Z", region="Downtown")
-        _seed_listing(persist, "L_midtown", first_seen="2026-07-07T05:00:00Z", region="Midtown")
+        _seed_listing(persist, "L_downtown", first_seen=self._now_minus(1), region="Downtown")
+        _seed_listing(persist, "L_midtown", first_seen=self._now_minus(1), region="Midtown")
         persist.upsert_saved_search(
             email="a@x.com", name="dt",
             region="Downtown", notify_on_match=True,
@@ -484,7 +539,7 @@ class TestCheckAndSendSavedSearchAlerts:
         """If send_fn returns False, we record an error and don't stamp last_sent."""
         import persist
         persist.init_db()
-        _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
+        _seed_listing(persist, "L1", first_seen=self._now_minus(1))
         persist.upsert_saved_search(
             email="u@x.com", name="boom", notify_on_match=True,
         )
@@ -499,7 +554,7 @@ class TestCheckAndSendSavedSearchAlerts:
     def test_send_exception_counts_as_error(self, isolated_db):
         import persist
         persist.init_db()
-        _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
+        _seed_listing(persist, "L1", first_seen=self._now_minus(1))
         persist.upsert_saved_search(
             email="u@x.com", name="boom2", notify_on_match=True,
         )
@@ -607,6 +662,8 @@ class TestApiRunChecks:
     def test_run_checks_invokes_worker(self, isolated_db, monkeypatch):
         import persist
         persist.init_db()
+        # Hardcoded date is fine here — the worker is replaced with a sentinel
+        # below, so the timestamp value doesn't affect behavior.
         _seed_listing(persist, "L1", first_seen="2026-07-07T05:00:00Z")
         persist.upsert_saved_search(
             email="u@x.com", name="x", notify_on_match=True,
