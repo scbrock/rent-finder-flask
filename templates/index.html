@@ -103,12 +103,33 @@
     #only_new_count { font-size: 0.7rem; color: #0d5c26; margin-left: 2px; font-weight: 600; }
     #only_new_toggle.active { background: #c3f0ca; border-color: #0d5c26; color: #0d5c26; }
 
+    /* MC-325: price-drop toggle styling + badge styling */
+    #price_drop_count { font-size: 0.7rem; color: #8b1a1a; margin-left: 2px; font-weight: 600; }
+    #price_drop_toggle.active { background: #ffe0e0; border-color: #8b1a1a; color: #8b1a1a; }
+    .price-drop-badge {
+        display: inline-block; background: #ffd6d6; color: #8b1a1a;
+        padding: 1px 6px; border-radius: 8px;
+        font-size: 0.7rem; font-weight: 700; margin-left: 4px;
+        border: 1px solid #ffb3b3;
+    }
+
     /* ── Source badge (MC-316) ── */
     .source-badge { display: inline-block; padding: 1px 6px; border-radius: 8px;
                     font-size: 0.65rem; font-weight: 700; margin-left: 4px;
                     letter-spacing: 0.5px; text-transform: uppercase; }
     .source-kijiji { background: #e0f0ff; color: #1e5b94; border: 1px solid #b3d9ff; }
     .source-cl { background: #fff0e0; color: #8b4513; border: 1px solid #ffc299; }
+
+    /* ── MC-327: Sqft Price badge (color-coded by $/sqft bucket) ── */
+    .pps-badge {
+        display: inline-block; padding: 1px 7px; border-radius: 8px;
+        font-size: 0.78rem; font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .pps-cheap { background: #c3f0ca; color: #0d5c26; }      /* <= $3.00/sqft: green */
+    .pps-fair { background: #fff3cd; color: #856404; }       /* $3.00-$4.50/sqft: yellow */
+    .pps-expensive { background: #ffe0e0; color: #8b1a1a; } /* > $4.50/sqft: red */
+    .pps-na { color: #aaa; font-style: italic; font-size: 0.85rem; }
 
     /* ── Cautions column (MC-255) ── */
     .cautions-cell { min-width: 160px; }
@@ -155,7 +176,7 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 1.3rem; color: #95a99e;
     }
-    /* MC-309: Craigslist lazy-load placeholder — shimmer while fetching */
+    /* MC-309: Craigslist lazy-load placeholder - shimmer while fetching */
     .deal-thumb-fallback.cl-lazy {
       border: 1px dashed #cbd5d0;
       box-sizing: border-box;
@@ -286,7 +307,7 @@
   <header style="display:flex; justify-content:space-between; align-items:flex-start;">
     <div>
       <h1>🏠 Toronto Rent Deals</h1>
-      <p>Find Toronto rentals priced below market. We score every listing — so you only look at the ones worth your time.</p>
+      <p>Find Toronto rentals priced below market. We score every listing - so you only look at the ones worth your time.</p>
     </div>
     <a href="/profile" id="profile_status_badge" style="color:#a8d5c2; font-size:0.8rem; text-decoration:none; white-space:nowrap; margin-top:4px; display:none;">⚙️ My Preferences</a>
   </header>
@@ -315,9 +336,9 @@
       </div>
     </div>
     <!-- Stats -->
-    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found</div></div>
-    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under Market</div></div>
-    <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal</div></div>
+    <div class="stat-card"><div class="value" id="total_count">-</div><div class="label">Deals Found</div></div>
+    <div class="stat-card"><div class="value" id="avg_under">-</div><div class="label">Avg % Under Market</div></div>
+    <div class="stat-card"><div class="value" id="best_deal">-</div><div class="label">Best Deal</div></div>
   </div>
 
   <div class="filters">
@@ -350,9 +371,16 @@
       <label>Price Range ($)</label>
       <div class="price-range-wrap">
         <input id="price_min" type="number" placeholder="Min" min="0" step="50">
-        <span>–</span>
+        <span>-</span>
         <input id="price_max" type="number" placeholder="Max" min="0" step="50">
       </div>
+    </div>
+
+    <!-- MC-327: Max $/sqft filter. Accepts 0.5-step decimals so users can cap
+         at, say, $3.50/sqft to surface only the best value-per-space rows. -->
+    <div class="filter-group">
+      <label for="max_price_per_sqft">Max $/sqft</label>
+      <input id="max_price_per_sqft" type="number" placeholder="e.g. 4" min="0" step="0.5" style="width:80px;" title="Maximum price per square foot (e.g. 4 = $4.00/sqft cap)">
     </div>
 
     <!-- Parking -->
@@ -420,6 +448,8 @@
         <option value="days_ago">Freshest</option>
         <!-- MC-324: sort by days_listed (longest-listed = potentially negotiable). -->
         <option value="days_listed">Longest Listed</option>
+        <!-- MC-327: sort by price_per_sqft (best $/sqft value at the top). -->
+        <option value="price_per_sqft">Lowest $/sqft</option>
       </select>
     </div>
 
@@ -434,7 +464,15 @@
          label is populated from /api/meta.new_count. -->
     <label class="toggle-btn" id="only_new_toggle" title="Show only listings first seen in the last 6 hours">
       <input type="checkbox" id="only_new">
-      <span>✨ Only NEW <span id="only_new_count">(…)</span></span>
+      <span>✨ Only NEW <span id="only_new_count">(...)</span></span>
+    </label>
+
+    <!-- Price Drop toggle (MC-325): surface listings whose current price is
+         at least 5% lower than the oldest recorded price in the last 14 days.
+         The count badge next to the label is populated from /api/meta.price_drop_count. -->
+    <label class="toggle-btn" id="price_drop_toggle" title="Show only listings whose price dropped by ≥5% in the last 14 days">
+      <input type="checkbox" id="price_dropped">
+      <span>📉 Price Drop <span id="price_drop_count">(...)</span></span>
     </label>
 
     <div style="display:flex;gap:6px;align-items:flex-end;">
@@ -462,12 +500,12 @@
         <div style="border-left:1px solid #eee;"><div style="font-size:1.8rem; margin-bottom:6px;">&#128176;</div><div style="font-weight:700; font-size:0.9rem; color:#2d6a4f; margin-bottom:4px;">You Save</div><div style="font-size:0.78rem; color:#555; line-height:1.5;">Filter to deals under market. Click through to Kijiji. No signup. No spam. Just good finds.</div></div>
       </div>
     </div>
-    <div class="stat-card"><div class="value" id="total_count">—</div><div class="label">Deals Found Today</div></div>
-    <div class="stat-card"><div class="value" id="avg_under">—</div><div class="label">Avg % Under Market</div></div>
-    <div class="stat-card"><div class="value" id="best_deal">—</div><div class="label">Best Deal Today</div></div>
+    <div class="stat-card"><div class="value" id="total_count">-</div><div class="label">Deals Found Today</div></div>
+    <div class="stat-card"><div class="value" id="avg_under">-</div><div class="label">Avg % Under Market</div></div>
+    <div class="stat-card"><div class="value" id="best_deal">-</div><div class="label">Best Deal Today</div></div>
   </div>
 
-  <!-- MC-274: You Might Also Like — shown only if user has shortlisted listings -->
+  <!-- MC-274: You Might Also Like - shown only if user has shortlisted listings -->
   <div id="similar-shortlist-section" style="display:none; background:white; border-radius:8px; padding:14px 18px; margin-bottom:14px; border-left:4px solid #2d6a4f;">
     <div style="font-size:0.75rem; font-weight:700; color:#888; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:10px;">🔍 You Might Also Like</div>
     <div id="similar-shortlist-list" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px;"></div>
@@ -486,7 +524,7 @@
     <div id="map" style="height:100%;width:100%;"></div>
   </div>
 
-  <div id="loading" class="loading">Loading deals…</div>
+  <div id="loading" class="loading">Loading deals...</div>
   <div id="no_deals" class="no-deals" style="display:none">No deals match your filters.</div>
 
   <!-- MC-259: Listing Detail Modal -->
@@ -499,11 +537,11 @@
       <!-- MC-307/MC-308/MC-312: Listing photos.
            MC-307: Kijiji photos from the scraper (single image URL).
            MC-308: Craigslist photos lazy-fetched via /api/craigslist/photo.
-           MC-312: Gallery carousel — multiple photos rendered by static/listing_gallery.js.
+           MC-312: Gallery carousel - multiple photos rendered by static/listing_gallery.js.
            The single #modal_photo_wrap is repurposed as the carousel container. -->
       <div id="modal_photo_wrap" style="display:none;margin-bottom:16px;position:relative;">
         <div id="modal_photo_spinner" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);border-radius:8px;z-index:2;">
-          <div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">⏳ Loading photo…</div>
+          <div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">⏳ Loading photo...</div>
         </div>
       </div>
 
@@ -530,12 +568,12 @@
       <div style="margin-bottom:16px;">
         <div style="font-weight:600;font-size:0.9rem;color:#555;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:4px;">🏠 Listing Details</div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:0.85rem;">
-          <div><strong>BD:</strong> <span id="modal_beds">—</span></div>
-          <div><strong>BA:</strong> <span id="modal_baths">—</span></div>
-          <div><strong>Sqft:</strong> <span id="modal_sqft">—</span></div>
-          <div><strong>Commute:</strong> <span id="modal_commute">—</span></div>
-          <div><strong>Age:</strong> <span id="modal_age">—</span></div>
-          <div><strong>Status:</strong> <span id="modal_status">—</span></div>
+          <div><strong>BD:</strong> <span id="modal_beds">-</span></div>
+          <div><strong>BA:</strong> <span id="modal_baths">-</span></div>
+          <div><strong>Sqft:</strong> <span id="modal_sqft">-</span></div>
+          <div><strong>Commute:</strong> <span id="modal_commute">-</span></div>
+          <div><strong>Age:</strong> <span id="modal_age">-</span></div>
+          <div><strong>Status:</strong> <span id="modal_status">-</span></div>
         </div>
       </div>
 
@@ -592,6 +630,10 @@
         <th onclick="sortTable('beds')">BD</th>
         <th onclick="sortTable('baths')">BA</th>
         <th onclick="sortTable('price')">Price</th>
+        <!-- MC-327: Sqft Price column — universal value metric. Header is
+             clickable for sort; cells render d.price_per_sqft_str (formatted
+             '$X.XX' or em-dash when sqft is missing). -->
+        <th onclick="sortTable('price_per_sqft')" title="Price per square foot — lower = better value" style="white-space:nowrap;">$/sqft</th>
         <th onclick="sortTable('fair')">Fair</th>
         <th onclick="sortTable('pct')">% Under</th>
         <th onclick="sortTable('commute')" title="Walking commute time">↳ Min</th>
@@ -599,7 +641,7 @@
         <!-- MC-324: Listed column shows how long the listing has been in our
              data, distinct from "Age" (days since source-side activation date).
              Useful as a stronger negotiable-price signal. -->
-        <th onclick="sortTable('days_listed')" title="Days since our scraper first saw this listing — longer = potentially negotiable">Listed</th>
+        <th onclick="sortTable('days_listed')" title="Days since our scraper first saw this listing - longer = potentially negotiable">Listed</th>
         <th title="Walking time to nearest grocery store" style="white-space:nowrap;">🛒 Grocery</th>
         <th title="Walking time to nearest TTC station" style="white-space:nowrap;">🚇 TTC</th>
         <th title="Walking time to nearest parking lot" style="white-space:nowrap;">🚗 Parking</th>
@@ -717,7 +759,7 @@ document.getElementById('alert_form').addEventListener('submit', async function(
   const btn = document.getElementById('alert_submit_btn');
   const msg = document.getElementById('alert_msg');
   btn.disabled = true;
-  btn.textContent = 'Saving…';
+  btn.textContent = 'Saving...';
   const payload = {
     email: document.getElementById('alert_email').value.trim(),
     region: document.getElementById('alert_region').value || undefined,
@@ -762,6 +804,9 @@ function parseQueryParams() {
     document.getElementById('sort_by').value = params.get('sort');
     currentSort = params.get('sort');
   }
+  // MC-327: round-trip max_price_per_sqft from URL into the input so
+  // refresh + share-link flows keep the cap active.
+  if (params.get('price_per_sqft_max')) document.getElementById('max_price_per_sqft').value = params.get('price_per_sqft_max');
   if (params.get('commute_dest')) document.getElementById('commute_dest').value = params.get('commute_dest');
   if (params.get('max_commute')) document.getElementById('max_commute').value = params.get('max_commute');
   if (params.get('max_subway')) document.getElementById('max_subway').value = params.get('max_subway');
@@ -775,10 +820,16 @@ function parseQueryParams() {
     document.getElementById('only_new').checked = true;
     document.getElementById('only_new_toggle').classList.add('active');
   }
+  // MC-325: round-trip price_dropped from URL into the Price Drop toggle so
+  // refresh and share-link flows keep the filter active.
+  if (params.get('price_dropped') === 'true') {
+    document.getElementById('price_dropped').checked = true;
+    document.getElementById('price_drop_toggle').classList.add('active');
+  }
   updateFilterCount();
 }
 
-// MC-322: round-trip helper — re-apply a saved filter snapshot to the bar.
+// MC-322: round-trip helper - re-apply a saved filter snapshot to the bar.
 // Accepts an object with the same keys as buildParams() and tries the same
 // write paths as parseQueryParams() so Save → Load is symmetric.
 function applySavedFilters(filters) {
@@ -795,6 +846,8 @@ function applySavedFilters(filters) {
   setIfPresent('commute_dest', filters.commute_dest);
   setIfPresent('max_commute', filters.max_commute);
   setIfPresent('max_subway', filters.max_subway);
+  // MC-327: round-trip the $/sqft cap when Load filters from saved search.
+  setIfPresent('max_price_per_sqft', filters.price_per_sqft_max);
   if (filters.has_parking === 'true' || filters.has_parking === true) {
     document.getElementById('has_parking').checked = true;
     document.getElementById('parking_toggle').classList.add('active');
@@ -811,6 +864,11 @@ function applySavedFilters(filters) {
   if (filters.is_new === 'true' || filters.is_new === true) {
     document.getElementById('only_new').checked = true;
     document.getElementById('only_new_toggle').classList.add('active');
+  }
+  // MC-325: saved-searches Load parity for the Price Drop toggle.
+  if (filters.price_dropped === 'true' || filters.price_dropped === true) {
+    document.getElementById('price_dropped').checked = true;
+    document.getElementById('price_drop_toggle').classList.add('active');
   }
   updateFilterCount();
   return true;
@@ -830,6 +888,9 @@ function getCurrentFilterStateAsObject() {
   // MC-323: include Only NEW state in saved-search snapshots so users who
   // save a "today's new deals" filter combo reload it correctly later.
   out.is_new = document.getElementById('only_new').checked ? 'true' : '';
+  // MC-325: include Price Drop state in saved-search snapshots so users who
+  // save a "price drops" filter combo reload it correctly later.
+  out.price_dropped = document.getElementById('price_dropped').checked ? 'true' : '';
   return out;
 }
 
@@ -840,7 +901,7 @@ function describeFilters(filters) {
   if (filters.price_min || filters.price_max) {
     const lo = filters.price_min ? `$${filters.price_min}` : '$0';
     const hi = filters.price_max ? `$${filters.price_max}` : '∞';
-    parts.push(`${lo}–${hi}`);
+    parts.push(`${lo}-${hi}`);
   }
   if (filters.region) parts.push(`Region: ${filters.region}`);
   if (filters.neighbourhood) parts.push(`Neighbourhood: ${filters.neighbourhood}`);
@@ -851,10 +912,14 @@ function describeFilters(filters) {
   // MC-323: surface the Only NEW filter in the save-search summary so users
   // see what the snapshot will reload.
   if (filters.is_new === 'true') parts.push(`Only NEW (6h)`);
+  // MC-325: surface the Price Drop filter in the save-search summary.
+  if (filters.price_dropped === 'true') parts.push(`Price drops (≥5% / 14d)`);
   if (filters.commute_dest) parts.push(`→ ${filters.commute_dest}`);
   if (filters.max_commute) parts.push(`Commute ≤ ${filters.max_commute}m`);
   if (filters.max_subway) parts.push(`Subway ≤ ${filters.max_subway}m`);
-  return parts.length ? parts.join(' · ') : 'No filters set — saving as "all listings".';
+  // MC-327: surface the Max $/sqft filter in the save-search summary.
+  if (filters.price_per_sqft_max) parts.push(`≤ $${filters.price_per_sqft_max}/sqft`);
+  return parts.length ? parts.join(' · ') : 'No filters set - saving as "all listings".';
 }
 
 function openSaveSearchModal() {
@@ -887,7 +952,7 @@ async function submitSaveSearch() {
   if (!name) { status.textContent = 'Please enter a name.'; status.style.color = '#c1452d'; status.style.display = 'block'; return; }
   if (!email || !email.includes('@')) { status.textContent = 'Please enter a valid email.'; status.style.color = '#c1452d'; status.style.display = 'block'; return; }
   const filters = getCurrentFilterStateAsObject();
-  status.textContent = 'Saving…'; status.style.color = '#555'; status.style.display = 'block';
+  status.textContent = 'Saving...'; status.style.color = '#555'; status.style.display = 'block';
   try {
     const res = await fetch('/api/saved-searches', {
       method: 'POST',
@@ -961,6 +1026,7 @@ function buildParams() {
   const sortBy = document.getElementById('sort_by').value;
   const hideStale = document.getElementById('hide_stale').checked;
   const onlyNew = document.getElementById('only_new').checked;
+  const priceDropped = document.getElementById('price_dropped').checked;
 
   if (bedsMin) params.set('beds_min', bedsMin);
   if (bathsMin) params.set('baths_min', bathsMin);
@@ -972,8 +1038,10 @@ function buildParams() {
   if (source) params.set('source', source);
   if (sortBy !== 'score') params.set('sort', sortBy);
   if (hideStale) params.set('hide_stale', 'true');
-  // MC-323: Only NEW (6h) filter — round-trip with parseQueryParams/applySavedFilters.
+  // MC-323: Only NEW (6h) filter - round-trip with parseQueryParams/applySavedFilters.
   if (onlyNew) params.set('is_new', 'true');
+  // MC-325: Price Drop filter - round-trip with parseQueryParams/applySavedFilters.
+  if (priceDropped) params.set('price_dropped', 'true');
 
   const commuteDest = document.getElementById('commute_dest').value.trim();
   const maxCommute = document.getElementById('max_commute').value;
@@ -981,6 +1049,11 @@ function buildParams() {
   if (commuteDest) params.set('commute_dest', commuteDest);
   if (maxCommute) params.set('max_commute', maxCommute);
   if (maxSubway) params.set('max_subway', maxSubway);
+
+  // MC-327: Max $/sqft cap. Round-trips through parseQueryParams / applySavedFilters.
+  // Accepts 0.5-step decimals (e.g. "4" or "3.5").
+  const maxPricePerSqft = document.getElementById('max_price_per_sqft').value;
+  if (maxPricePerSqft) params.set('price_per_sqft_max', maxPricePerSqft);
 
   return params;
 }
@@ -1001,6 +1074,10 @@ function updateFilterCount() {
   if (document.getElementById('source').value) count++;
   // MC-323: Only NEW toggle counts as one active filter when checked.
   if (document.getElementById('only_new').checked) count++;
+  // MC-325: Price Drop toggle counts as one active filter when checked.
+  if (document.getElementById('price_dropped').checked) count++;
+  // MC-327: Max $/sqft cap counts as one active filter when set.
+  if (document.getElementById('max_price_per_sqft').value) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -1026,9 +1103,14 @@ function resetFilters() {
   // MC-323: clear the Only NEW toggle along with all other filters
   document.getElementById('only_new').checked = false;
   document.getElementById('only_new_toggle').classList.remove('active');
+  // MC-325: clear the Price Drop toggle along with all other filters
+  document.getElementById('price_dropped').checked = false;
+  document.getElementById('price_drop_toggle').classList.remove('active');
   document.getElementById('commute_dest').value = '';
   document.getElementById('max_commute').value = '';
   document.getElementById('max_subway').value = '';
+  // MC-327: clear Max $/sqft cap alongside the other filters.
+  document.getElementById('max_price_per_sqft').value = '';
   commuteTimesCache = {};
   loadDeals();
   history.replaceState({}, '', window.location.pathname);
@@ -1135,7 +1217,7 @@ async function loadMoreDeals() {
 
   btn.disabled = true;
   const originalText = btn.textContent;
-  btn.textContent = 'Loading…';
+  btn.textContent = 'Loading...';
 
   try {
     const res = await fetch('/api/deals?' + params.toString());
@@ -1167,10 +1249,10 @@ async function loadMoreDeals() {
     renderLoadMore(); // refresh footer state based on new totals
   } catch(e) {
     console.warn('Load more failed:', e);
-    btn.textContent = '✗ failed — click to retry';
+    btn.textContent = '✗ failed - click to retry';
   } finally {
     if (btn) btn.disabled = !currentHasMore;
-    if (currentHasMore && btn && btn.textContent === 'Loading…') {
+    if (currentHasMore && btn && btn.textContent === 'Loading...') {
       btn.textContent = originalText;
     }
   }
@@ -1204,7 +1286,7 @@ function renderLoadMore() {
 }
 
 function pctClass(pct) {
-  if (pct === '—') return '';
+  if (pct === '-') return '';
   const n = parseFloat(pct);
   if (n >= 15) return 'pct-good';
   if (n >= 8) return 'pct-mid';
@@ -1216,8 +1298,8 @@ function renderDeals(deals, pagination) {
   if (!deals || deals.length === 0) {
     document.getElementById('no_deals').style.display = 'block';
     document.getElementById('total_count').textContent = '0';
-    document.getElementById('avg_under').textContent = '—';
-    document.getElementById('best_deal').textContent = '—';
+    document.getElementById('avg_under').textContent = '-';
+    document.getElementById('best_deal').textContent = '-';
     // MC-319: hide Load more when there's nothing to show
     const moreBtn = document.getElementById('load_more_btn');
     if (moreBtn) moreBtn.style.display = 'none';
@@ -1229,10 +1311,10 @@ function renderDeals(deals, pagination) {
   const total = (pagination && typeof pagination.total === 'number') ? pagination.total : deals.length;
   document.getElementById('total_count').textContent = String(total);
   const pcts = deals.map(d => parseFloat(d.pct_under)).filter(n => !isNaN(n));
-  const avg = pcts.length ? (pcts.reduce((a,b)=>a+b,0)/pcts.length).toFixed(1) : '—';
-  document.getElementById('avg_under').textContent = avg !== '—' ? avg + '%' : '—';
+  const avg = pcts.length ? (pcts.reduce((a,b)=>a+b,0)/pcts.length).toFixed(1) : '-';
+  document.getElementById('avg_under').textContent = avg !== '-' ? avg + '%' : '-';
   const best = deals[0];
-  document.getElementById('best_deal').textContent = best ? best.pct_under_fmt : '—';
+  document.getElementById('best_deal').textContent = best ? best.pct_under_fmt : '-';
 
   const tbody = document.getElementById('deals_body');
   tbody.innerHTML = '';
@@ -1254,30 +1336,30 @@ function renderDeals(deals, pagination) {
 // MC-319: Build the HTML string for a single deal row. Shared by renderDeals (first page)
 // and appendDealRows (subsequent pages) so the row layout stays identical.
 function makeRowHtml(d) {
-    const pct = d.pct_under_fmt || '—';
+    const pct = d.pct_under_fmt || '-';
     const pctCls = pctClass(pct);
     const link = d.link || '#';
-    const beds = d.beds !== undefined && d.beds !== null ? d.beds : '—';
-    const baths = d.baths !== undefined && d.baths !== null ? d.baths : '—';
-    const commute = d.commute_minutes !== undefined && d.commute_minutes !== null && d.commute_minutes !== '' ? d.commute_minutes + ' min' : '—';
+    const beds = d.beds !== undefined && d.beds !== null ? d.beds : '-';
+    const baths = d.baths !== undefined && d.baths !== null ? d.baths : '-';
+    const commute = d.commute_minutes !== undefined && d.commute_minutes !== null && d.commute_minutes !== '' ? d.commute_minutes + ' min' : '-';
 
     // MC-267: Grocery store walk time
     const groceryName = d.grocery_name;
     const groceryWalk = d.grocery_walk_min;
-    let groceryHtml = '—';
+    let groceryHtml = '-';
     if (groceryName) {
       const walkStr = groceryWalk ? groceryWalk + ' min' : '';
       groceryHtml = `<span title="${groceryName}">🛒 ${walkStr}</span>`;
     } else if (groceryWalk === null) {
-      groceryHtml = '<span style="color:#888;" title="No grocery store within 20 min walk">—</span>';
+      groceryHtml = '<span style="color:#888;" title="No grocery store within 20 min walk">-</span>';
     }
 
     const parkingIcon = d.has_parking ? '<span class="parking-icon" title="Parking">🚗</span>' : '';
 
-    // MC-270: TTC station walk time — green badge (≤5 min), red badge (>20 min)
+    // MC-270: TTC station walk time - green badge (≤5 min), red badge (>20 min)
     const stationName = d.station_name;
     const stationWalk = d.station_walk_min;
-    let ttcHtml = '—';
+    let ttcHtml = '-';
     if (stationName) {
       const walkStr = stationWalk ? stationWalk + ' min' : '';
       if (stationWalk !== null && stationWalk <= 5) {
@@ -1286,24 +1368,24 @@ function makeRowHtml(d) {
         ttcHtml = `<span title="${stationName}">🚇 ${walkStr}</span>`;
       }
     } else if (stationWalk === null) {
-      ttcHtml = '<span style="color:#888;" title="No TTC station within 20 min walk">—</span>';
+      ttcHtml = '<span style="color:#888;" title="No TTC station within 20 min walk">-</span>';
     }
 
     // MC-269: Parking lot walk time
     const parkingName = d.parking_name;
     const parkingWalk = d.parking_walk_min;
-    let parkingHtml = '—';
+    let parkingHtml = '-';
     if (parkingName) {
       const walkStr = parkingWalk ? parkingWalk + ' min' : '';
       parkingHtml = `<span title="${parkingName}">🚗 ${walkStr}</span>`;
     } else if (parkingWalk === null) {
-      parkingHtml = '<span style="color:#888;" title="No parking within 15 min walk">—</span>';
+      parkingHtml = '<span style="color:#888;" title="No parking within 15 min walk">-</span>';
     }
 
     // MC-254: days_ago badge with colour coding
     const daysAgo = d.days_ago;
     const daysAgoClass = d.days_ago_class || 'age-neutral';
-    const daysAgoStr = d.days_ago_str || (daysAgo !== null && daysAgo !== undefined ? daysAgo + 'd' : '—');
+    const daysAgoStr = d.days_ago_str || (daysAgo !== null && daysAgo !== undefined ? daysAgo + 'd' : '-');
 
     // MC-324: days_listed badge (color-coded: green <=7d, yellow 8-30d, red >30d).
     // Distinct from days_ago (which is the source-side posting age): days_listed
@@ -1311,13 +1393,19 @@ function makeRowHtml(d) {
     const daysListed = (d.days_listed !== undefined && d.days_listed !== null) ? d.days_listed : null;
     const daysListedClass = d.days_listed_class || (daysListed === null ? 'listed-neutral'
       : (daysListed <= 7 ? 'listed-fresh' : daysListed <= 30 ? 'listed-medium' : 'listed-stale'));
-    const daysListedStr = d.days_listed_str || (daysListed === null ? '—'
+    const daysListedStr = d.days_listed_str || (daysListed === null ? '-'
       : (daysListed === 0 ? 'today' : daysListed === 1 ? '1d listed' : `${daysListed}d listed`));
 
     // MC-252: May be stale warning badge (>30 days)
     const staleTag = (d.is_stale === true || d.is_stale === 'true') ? '<span class="stale-tag">⚠️ Stale</span>' : '';
     // MC-264: NEW badge for listings first seen in the last 6 hours
     const newTag = (d.is_new === true || d.is_new === 'true') ? '<span class="new-tag">✨ NEW</span>' : '';
+    // MC-325: Price Drop badge - shows when price_dropped=true with the
+    // percentage drop and the days-ago of the original (higher) price.
+    // Hover tooltip shows the original price for context.
+    const priceDropTag = (d.price_dropped === true && d.price_drop_pct != null)
+        ? `<span class="price-drop-badge" title="Was $${d.price_drop_from_price} (${d.price_drop_days_ago}d ago)">📉 ↓${d.price_drop_pct}%</span>`
+        : '';
     // MC-316: Source badge (Kijiji / Craigslist)
     const srcRaw = (d.source || '').toLowerCase();
     const srcLabel = srcRaw === 'kijiji' ? 'Kijiji' : srcRaw === 'craigslist' ? 'CL' : '';
@@ -1349,12 +1437,19 @@ function makeRowHtml(d) {
         }
         return '<div class="deal-thumb-fallback">🏠</div>';
       })()}</td>
-      <td><strong>${d.neighbourhood || '—'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${srcTag}${d.neighborhood_slug ? ` <a href="/neighborhood/${encodeURIComponent(d.neighborhood_slug)}" target="_blank" rel="noopener" class="nbhd-stats-link" title="View neighbourhood stats in a new tab">📊</a>` : ''}</td>
-      <td>${d.region || '—'}</td>
+      <td><strong>${d.neighbourhood || '-'}</strong> ${parkingIcon} ${staleTag} ${newTag} ${priceDropTag} ${srcTag}${d.neighborhood_slug ? ` <a href="/neighborhood/${encodeURIComponent(d.neighborhood_slug)}" target="_blank" rel="noopener" class="nbhd-stats-link" title="View neighbourhood stats in a new tab">📊</a>` : ''}</td>
+      <td>${d.region || '-'}</td>
       <td>${beds}</td>
       <td>${baths}</td>
-      <td>${d.price_fmt || '—'} <span class="price-trend-badge" data-lid="${d.listing_id || ''}"></span></td>
-      <td>${d.fair_value_fmt || '—'}</td>
+      <td>${d.price_fmt || '-'} <span class="price-trend-badge" data-lid="${d.listing_id || ''}"></span></td>
+      <!-- MC-327: Sqft Price cell — formatted '$X.XX' or em-dash placeholder.
+           We render using d.price_per_sqft (numeric) + d.price_per_sqft_str (formatted)
+           so the format helper stays the single source of truth for cell content.
+           The colour class is from _price_per_sqft_class() in app.py. -->
+      <td>${d.price_per_sqft !== undefined && d.price_per_sqft !== null
+            ? `<span class="pps-badge ${d.price_per_sqft_class || ''}" title="$${Number(d.price_per_sqft).toFixed(2)} per square foot">${d.price_per_sqft_str}</span>`
+            : '<span class="pps-na">—</span>'}</td>
+      <td>${d.fair_value_fmt || '-'}</td>
       <td class="${pctCls}" style="font-size:1rem;font-weight:700;"><strong>${pct}</strong></td>
       <td>${commute}</td>
       <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span></td>
@@ -1395,7 +1490,7 @@ async function loadPriceTrends() {
     if (!resp.ok) return;
     const data = await resp.json();
     const trends = data.trends || {};
-    const trendIcons = { down: '↓', up: '↑', stable: '—' };
+    const trendIcons = { down: '↓', up: '↑', stable: '-' };
     const trendColors = { down: '#27ae60', up: '#c0392b', stable: '#aaa' };
     const trendTitles = { down: 'Price dropped', up: 'Price rising', stable: 'Price stable' };
     document.querySelectorAll('.price-trend-badge[data-lid]').forEach(span => {
@@ -1422,14 +1517,20 @@ document.getElementById('hide_stale').addEventListener('change', function() {
   updateFilterCount();
 });
 
-// MC-323: Only NEW toggle styling — mirrors the hide_stale pattern.
+// MC-323: Only NEW toggle styling - mirrors the hide_stale pattern.
 document.getElementById('only_new').addEventListener('change', function() {
   document.getElementById('only_new_toggle').classList.toggle('active', this.checked);
   updateFilterCount();
 });
 
+// MC-325: Price Drop toggle styling - mirrors the Only NEW pattern.
+document.getElementById('price_dropped').addEventListener('change', function() {
+  document.getElementById('price_drop_toggle').classList.toggle('active', this.checked);
+  updateFilterCount();
+});
+
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
@@ -1440,6 +1541,7 @@ loadProfilePreferences();
 loadShortlistStatus();
 loadSimilarShortlist();  // MC-274: "You might also like" for users with shortlisted listings
 loadNewCountBadge();     // MC-323: populate the "(N new)" hint next to the Only NEW toggle
+loadPriceDropCountBadge();  // MC-325: populate the "(N drops)" hint next to the Price Drop toggle
 loadDeals();
 
 // MC-323: Fetch /api/meta.new_count and render "(N new)" next to the Only NEW
@@ -1455,7 +1557,23 @@ async function loadNewCountBadge() {
     const n = (data && typeof data.new_count === 'number') ? data.new_count : 0;
     el.textContent = '(' + n + ' new)';
   } catch(e) {
-    el.textContent = '—';
+    el.textContent = '-';
+  }
+}
+
+// MC-325: Fetch /api/meta.price_drop_count and render "(N drops)" next to the
+// Price Drop toggle label. Same fail-silent pattern as loadNewCountBadge.
+async function loadPriceDropCountBadge() {
+  const el = document.getElementById('price_drop_count');
+  if (!el) return;
+  try {
+    const resp = await fetch('/api/meta');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const n = (data && typeof data.price_drop_count === 'number') ? data.price_drop_count : 0;
+    el.textContent = '(' + n + ' drops)';
+  } catch(e) {
+    el.textContent = '-';
   }
 }
 
@@ -1532,10 +1650,10 @@ async function openListingDetail(listingId) {
     }
     const d = await resp.json();
 
-    document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '—';
+    document.getElementById('modal_neighbourhood').textContent = d.neighbourhood || '-';
     document.getElementById('modal_region').textContent = d.region || '';
 
-    // MC-307/MC-308/MC-312: Listing photo(s) — use the gallery carousel if multiple
+    // MC-307/MC-308/MC-312: Listing photo(s) - use the gallery carousel if multiple
     // photos, or a single-image view if only one, or fall back to a Craigslist
     // lazy fetch when no photos are present initially.
     const photoWrap = document.getElementById('modal_photo_wrap');  // MC-312: now the carousel container
@@ -1554,7 +1672,7 @@ async function openListingDetail(listingId) {
       gallery.renderGallery(initialImages, photoWrap, { alt: d.title || 'Listing photo' });
       photoSpinner.style.display = 'none';
     } else if (isCraigslist) {
-      // MC-308: no images yet + CL listing — show spinner while we lazy-fetch
+      // MC-308: no images yet + CL listing - show spinner while we lazy-fetch
       photoWrap.style.display = 'block';
       while (photoWrap.firstChild) photoWrap.removeChild(photoWrap.firstChild);
       photoSpinner.style.display = 'flex';
@@ -1589,33 +1707,33 @@ async function openListingDetail(listingId) {
         photoSpinner.style.display = 'none';
       }
     } else {
-      // No images, not CL — hide the block entirely
+      // No images, not CL - hide the block entirely
       while (photoWrap.firstChild) photoWrap.removeChild(photoWrap.firstChild);
       photoWrap.style.display = 'none';
       photoSpinner.style.display = 'none';
     }
 
-    document.getElementById('modal_price').textContent = d.price_fmt || '—';
+    document.getElementById('modal_price').textContent = d.price_fmt || '-';
     document.getElementById('modal_fair_value').textContent = d.fair_value_fmt ? `vs fair value ${d.fair_value_fmt}` : '';
     document.getElementById('modal_pct_under').textContent = d.pct_under_fmt ? `${d.pct_under_fmt} under market` : '';
 
     const bd = d.breakdown;
     if (bd) {
-      document.getElementById('modal_segment').textContent = bd.segment || '—';
+      document.getElementById('modal_segment').textContent = bd.segment || '-';
       document.getElementById('modal_score').textContent = (bd.deal_score || 0).toFixed(3);
-      document.getElementById('modal_listed_price').textContent = bd.listed_price_fmt || '—';
-      document.getElementById('modal_fair').textContent = bd.fair_value || '—';
+      document.getElementById('modal_listed_price').textContent = bd.listed_price_fmt || '-';
+      document.getElementById('modal_fair').textContent = bd.fair_value || '-';
       if (bd.listed_price && bd.fair_value) {
         const savings = (bd.fair_value - bd.listed_price).toFixed(0);
         document.getElementById('modal_savings').textContent = `$${parseFloat(savings).toLocaleString()}/mo`;
       }
     }
 
-    document.getElementById('modal_beds').textContent = d.beds != null ? d.beds : '—';
-    document.getElementById('modal_baths').textContent = d.baths != null ? d.baths : '—';
-    document.getElementById('modal_sqft').textContent = (d.sqft && d.sqft !== 'None') ? d.sqft : '—';
-    document.getElementById('modal_commute').textContent = d.commute_minutes != null ? `${d.commute_minutes} min` : '—';
-    document.getElementById('modal_age').textContent = d.days_ago_str || '—';
+    document.getElementById('modal_beds').textContent = d.beds != null ? d.beds : '-';
+    document.getElementById('modal_baths').textContent = d.baths != null ? d.baths : '-';
+    document.getElementById('modal_sqft').textContent = (d.sqft && d.sqft !== 'None') ? d.sqft : '-';
+    document.getElementById('modal_commute').textContent = d.commute_minutes != null ? `${d.commute_minutes} min` : '-';
+    document.getElementById('modal_age').textContent = d.days_ago_str || '-';
     document.getElementById('modal_status').textContent = d.is_stale ? '⚠️ Stale' : '✓ Active';
 
     // Render cautions
@@ -1628,7 +1746,7 @@ async function openListingDetail(listingId) {
         </div>
       `).join('');
     } else {
-      cautionsEl.innerHTML = '<div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">✓ No cautions — looks clean</div>';
+      cautionsEl.innerHTML = '<div style="font-size:0.85rem;color:#2d6a4f;font-weight:600;">✓ No cautions - looks clean</div>';
     }
 
     document.getElementById('modal_link').href = d.link || '#';
@@ -1663,7 +1781,7 @@ async function openListingDetail(listingId) {
         }
       }
     } catch(simErr) {
-      // Silently skip similar listings on error — not critical
+      // Silently skip similar listings on error - not critical
     }
 
     // MC-282: Load price history chart
@@ -1679,7 +1797,7 @@ async function openListingDetail(listingId) {
         const ph = await phResp.json();
         if (ph.count >= 2) {
           priceHistSection.style.display = 'block';
-          const trendIcons = {up: '↑ Price rising', down: '↓ Price dropped', stable: '— Price stable'};
+          const trendIcons = {up: '↑ Price rising', down: '↓ Price dropped', stable: '- Price stable'};
           const trendColors = {up: '#c0392b', down: '#27ae60', stable: '#777'};
           const trend = ph.trend || 'stable';
           priceHistTrend.innerHTML = `<span style="color:${trendColors[trend]};font-weight:600;">${trendIcons[trend]}</span>`;
@@ -1710,7 +1828,7 @@ async function openListingDetail(listingId) {
           });
         } else if (ph.count === 1) {
           priceHistSection.style.display = 'block';
-          priceHistTrend.innerHTML = '<span style="color:#777;">— Stable (only 1 data point)</span>';
+          priceHistTrend.innerHTML = '<span style="color:#777;">- Stable (only 1 data point)</span>';
         }
       }
     } catch(phErr) {
@@ -1922,7 +2040,7 @@ function escHtml(s) {
 
 function int(v) { return v == null ? '' : (parseInt(v) || 0); }
 
-// MC-274: "You might also like" — shown if user has shortlisted listings
+// MC-274: "You might also like" - shown if user has shortlisted listings
 async function loadSimilarShortlist() {
   const email = localStorage.getItem('rent_alert_email') || sessionStorage.getItem('rent_alert_email');
   if (!email || !email.includes('@')) return;
@@ -1948,7 +2066,7 @@ async function loadSimilarShortlist() {
       </div>
     `).join('');
   } catch(e) {
-    // silently skip — not critical
+    // silently skip - not critical
   }
 }
 </script>

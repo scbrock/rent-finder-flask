@@ -163,6 +163,69 @@ def _median(values):
     return (s[n // 2 - 1] + s[n // 2]) / 2
 
 
+def _compute_price_per_sqft(price, sqft):
+    """MC-327: Compute $/sqft for a listing.
+
+    Returns None if either price or sqft is missing / non-positive / non-numeric.
+    Returns a float rounded to 2 decimals (matches the UI '$X.XX' format).
+
+    Robust against all the junk that creeps into scraped fields:
+    - empty strings, None, 'None', 'nan' (string or float)
+    - numeric strings like '650' or '650.5'
+    - floats, ints, Decimals (via duck-typing on the float() call)
+    - zero/negative/missing sqft (which would divide by zero or invert sign)
+    """
+    def _to_num(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s in ('', 'None', 'nan', 'NaN', 'NAN'):
+            return None
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    p = _to_num(price)
+    s = _to_num(sqft)
+    if p is None or s is None or p <= 0 or s <= 0:
+        return None
+    return round(p / s, 2)
+
+
+def _price_per_sqft_str(pps):
+    """Format $/sqft value for the UI.
+
+    Empty/None -> em-dash placeholder ('\u2014') so the cell renders as a
+    graceful '—' instead of an empty box. Otherwise format with commas +
+    2 decimals when fractional, 0 decimals when whole-dollar (e.g. '$4' not
+    '$4.00', matching how apartment listings tend to be cited).
+    """
+    if pps is None:
+        return '\u2014'
+    if pps == int(pps):
+        return f"${int(pps):,}"
+    return f"${pps:,.2f}"
+
+
+def _price_per_sqft_class(pps):
+    """Classify $/sqft for color-coded UI badge (cheap / fair / expensive).
+
+    Returns:
+        'pps-cheap'    if pps <= 3.0
+        'pps-fair'     if pps <= 4.5
+        'pps-expensive' otherwise
+    None for missing data (caller renders as '—' with no chip).
+    """
+    if pps is None:
+        return ''
+    if pps <= 3.0:
+        return 'pps-cheap'
+    if pps <= 4.5:
+        return 'pps-fair'
+    return 'pps-expensive'
+
+
 def _neighborhood_stats(deals, name: str) -> dict | None:
     """Compute aggregate stats for a single neighborhood.
 
@@ -434,6 +497,13 @@ def _normalize_row(r: dict) -> dict:
             'is_stale': is_stale,
             'is_new': is_new,
             'sqft': r.get('sqft', ''),
+            # MC-327: price per square foot — universal rental value metric.
+            # Populated only when both price > 0 and sqft > 0; null otherwise.
+            # The str/class helpers cover empty-cell formatting + color coding
+            # for the UI's Sqft Price column.
+            'price_per_sqft': _compute_price_per_sqft(r.get('price'), r.get('sqft')),
+            'price_per_sqft_str': '',   # filled in below once row_dict exists
+            'price_per_sqft_class': '',
             'commute_minutes': float(r['commute_minutes']) if r.get('commute_minutes', '') not in ('', 'None', 'nan', None) else None,
             'link': r.get('url') or r.get('link', ''),
             'final_score': round(final_score, 3) if final_score else 0,
@@ -505,6 +575,10 @@ def _normalize_row(r: dict) -> dict:
         # the values are visible to _compute_cautions / sort handlers / UI).
         row_dict['days_listed_str'] = _days_listed_str(row_dict.get('days_listed'))
         row_dict['days_listed_class'] = _days_listed_class(row_dict.get('days_listed'))
+        # MC-327: $/sqft display helpers (str for the cell, class for colour).
+        _pps = row_dict.get('price_per_sqft')
+        row_dict['price_per_sqft_str'] = _price_per_sqft_str(_pps)
+        row_dict['price_per_sqft_class'] = _price_per_sqft_class(_pps)
         return row_dict
     except (ValueError, TypeError):
         return None
@@ -643,6 +717,13 @@ def api_deals():
     # Accepts the same truthy/falsy values as the is_new filter for consistency.
     price_dropped_raw = (request.args.get('price_dropped', '') or '').strip().lower()
     price_dropped = price_dropped_raw in ('true', '1', 'yes')
+    # MC-327: Max $/sqft filter. Numeric (step 0.5 in UI). Rows with null
+    # price_per_sqft (no sqft disclosed) are excluded — a missing-data row
+    # shouldn't be misclassified as "below the user's max $/sqft cap".
+    try:
+        max_price_per_sqft = float(request.args.get('price_per_sqft_max', '') or '')
+    except (TypeError, ValueError):
+        max_price_per_sqft = None
 
     # Apply filters
     if beds_min is not None:
@@ -674,6 +755,12 @@ def api_deals():
     # is passed. Combines cleanly with other filters (source, is_new, beds).
     if price_dropped:
         deals = [d for d in deals if d.get('price_dropped', False) is True]
+    # MC-327: Max $/sqft filter. Drop rows where price_per_sqft is missing
+    # (cannot validate them against the user's cap) or exceeds the cap.
+    if max_price_per_sqft is not None and max_price_per_sqft > 0:
+        deals = [d for d in deals
+                 if d.get('price_per_sqft') is not None
+                 and d['price_per_sqft'] <= max_price_per_sqft]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
@@ -683,7 +770,7 @@ def api_deals():
         deals = [d for d in deals if d.get('station_walk_min') is not None and d['station_walk_min'] <= max_subway]
 
     # Sort
-    reverse = sort_by not in ('price', 'days_ago')
+    reverse = sort_by not in ('price', 'days_ago', 'price_per_sqft')
     key_map = {
         'price': 'price',
         'pct': 'pct_under',
@@ -696,6 +783,8 @@ def api_deals():
         # default order (reverse=False) is HIGHEST days_listed first. We
         # achieve this by sorting on a negated key when sort_by is days_listed.
         'days_listed': 'days_listed',
+        # MC-327: $/sqft — best value (lowest $/sqft) at index 0 by default.
+        'price_per_sqft': 'price_per_sqft',
     }
     key = key_map.get(sort_by, 'final_score')
 
@@ -712,6 +801,20 @@ def api_deals():
         # To switch to "newest listed first", we'd add an explicit ?order= param
         # later; for now the default UX matches "Longest Listed".
         deals.sort(key=lambda d: -(_sort_key(d) if _sort_key(d) >= 0 else 1), reverse=False)
+    elif key == 'price_per_sqft':
+        # MC-327: Sort by $/sqft with nulls at the END regardless of direction.
+        # Use float('inf') as the sentinel for nulls so ascending puts them
+        # last, and descending (which reverses the whole list) keeps them
+        # last because inf + reverse(True) — actually wait, reverse(True)
+        # would put them first. To keep nulls last in BOTH directions we
+        # use a tuple sort: (is_null, value), where is_null=True sorts after
+        # is_null=False ascending.
+        def _pps_sort(d):
+            v = d.get('price_per_sqft')
+            if isinstance(v, (int, float)):
+                return (0, v)
+            return (1, 0)  # 1 sorts after 0, pushing nulls to the end
+        deals.sort(key=_pps_sort, reverse=False)
     else:
         deals.sort(key=_sort_key, reverse=reverse)
 
@@ -751,7 +854,14 @@ def api_meta():
     """Return min/max ranges derived from actual data for UI slider construction."""
     deals = load_deals()
     if not deals:
-        return jsonify({'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [], 'neighborhoods': [], 'new_count': 0})
+        return jsonify({
+            'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [],
+            'neighborhoods': [], 'new_count': 0, 'price_drop_count': 0,
+            'price_per_sqft_stats': {
+                'count_with_sqft': 0, 'count_without_sqft': 0,
+                'min': None, 'max': None, 'median': None, 'p25': None, 'p75': None,
+            },
+        })
 
     beds_vals = sorted(set(d['beds'] for d in deals if d['beds'] is not None))
     price_vals = [min(d['price'] for d in deals), max(d['price'] for d in deals)]
@@ -769,6 +879,45 @@ def api_meta():
     # (default 5% threshold). Used by the UI to render a "(N drops)" badge
     # next to the Price Drop toggle so users see the total at a glance.
     price_drop_count = sum(1 for d in deals if d.get('price_dropped', False) is True)
+    # MC-327: $/sqft distribution stats. Computed over ALL listings (not just
+    # the filtered set returned by /api/deals) so the UI can render a max-$/sqft
+    # slider with sensible bounds. Null price_per_sqft rows are excluded from
+    # stats but counted in `count_without_sqft` so the UI can show "X listings
+    # have no sqft data".
+    pps_vals = [d['price_per_sqft'] for d in deals
+                if isinstance(d.get('price_per_sqft'), (int, float))]
+    pps_total = len(deals)
+    pps_with = len(pps_vals)
+    pps_without = pps_total - pps_with
+    if pps_vals:
+        pps_min = round(min(pps_vals), 2)
+        pps_max = round(max(pps_vals), 2)
+        pps_median = round(_median(pps_vals), 2)
+        # Quick quartiles using sorted positions (no numpy / scipy dep).
+        sorted_pps = sorted(pps_vals)
+        n_pps = len(sorted_pps)
+        def _q(qf):
+            if n_pps == 1:
+                return float(sorted_pps[0])
+            pos = qf * (n_pps - 1)
+            lo = int(pos)
+            frac = pos - lo
+            if lo + 1 < n_pps:
+                return round(sorted_pps[lo] + frac * (sorted_pps[lo + 1] - sorted_pps[lo]), 2)
+            return float(sorted_pps[lo])
+        pps_p25 = _q(0.25)
+        pps_p75 = _q(0.75)
+    else:
+        pps_min = pps_max = pps_median = pps_p25 = pps_p75 = None
+    price_per_sqft_stats = {
+        'count_with_sqft': pps_with,
+        'count_without_sqft': pps_without,
+        'min': pps_min,
+        'max': pps_max,
+        'median': pps_median,
+        'p25': pps_p25,
+        'p75': pps_p75,
+    }
 
     return jsonify({
         'beds': beds_vals,
@@ -779,6 +928,7 @@ def api_meta():
         'neighborhoods': neighborhoods,
         'new_count': new_count,
         'price_drop_count': price_drop_count,
+        'price_per_sqft_stats': price_per_sqft_stats,
     })
 
 
