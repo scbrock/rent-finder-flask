@@ -45,6 +45,23 @@
     .filter-tag.only-new-tag { background: #c3f0ca; color: #0d5c26; font-weight: 600; }
     .search-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.8rem; color: #666; margin: 6px 0 10px; }
     .search-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* MC-326: bell icon for notify-on-match toggle */
+    .notify-toggle {
+      background: transparent;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 2px 6px;
+      cursor: pointer;
+      font-size: 1rem;
+      margin-left: 8px;
+      vertical-align: middle;
+      line-height: 1;
+    }
+    .notify-toggle:hover { background: #f0f0f0; }
+    .notify-toggle.on { background: #fff8d6; border-color: #d4a017; }
+    .notify-toggle.on::after { content: ''; }
+    .meta-notify-state.on { color: #b8860b; font-weight: 700; }
     .btn { padding: 7px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-weight: 600; font-size: 0.85rem; }
     .btn-primary { background: #2d6a4f; color: white; border-color: #2d6a4f; }
     .btn-primary:hover { background: #1f4a36; }
@@ -96,7 +113,11 @@
     <div class="search-card" data-search-id="">
       <div class="search-card-header">
         <div style="flex:1;">
-          <div class="search-name"></div>
+          <div class="search-name">
+            <span class="search-name-text"></span>
+            <button class="notify-toggle" data-act="toggle-notify" title="Toggle email notifications for new matches"
+                    aria-label="Toggle email notifications">🔕</button>
+          </div>
           <div class="filter-tags"></div>
         </div>
         <span class="match-count-badge no-matches">0 matches</span>
@@ -104,6 +125,7 @@
       <div class="search-meta">
         <span><strong>Created:</strong> <span class="meta-created"></span></span>
         <span><strong>Last checked:</strong> <span class="meta-checked">Never</span></span>
+        <span class="meta-notify"><strong>Notify:</strong> <span class="meta-notify-state">off</span></span>
       </div>
       <div class="filter-summary"></div>
       <div class="search-actions">
@@ -184,7 +206,20 @@ async function loadSearches() {
 function buildCard(s) {
   const tpl = document.getElementById('search-card-tpl').content.firstElementChild.cloneNode(true);
   tpl.dataset.searchId = s.search_id;
-  tpl.querySelector('.search-name').textContent = s.name;
+  tpl.querySelector('.search-name-text').textContent = s.name;
+
+  // MC-326: render notify-on-match bell + meta line.
+  const notifyBtn = tpl.querySelector('[data-act=toggle-notify]');
+  const notifyOn = !!(s.notify_on_match && Number(s.notify_on_match) === 1);
+  notifyBtn.textContent = notifyOn ? '🔔' : '🔕';
+  notifyBtn.classList.toggle('on', notifyOn);
+  notifyBtn.title = notifyOn
+    ? 'Email alerts ENABLED — you will get a daily summary of new matches. Click to disable.'
+    : 'Email alerts OFF. Click to enable daily summaries of new matches.';
+  const notifyState = tpl.querySelector('.meta-notify-state');
+  notifyState.textContent = notifyOn ? 'on (daily summary)' : 'off';
+  notifyState.classList.toggle('on', notifyOn);
+
   const countBadge = tpl.querySelector('.match-count-badge');
   const count = (s.match_count == null) ? 0 : s.match_count;
   countBadge.textContent = `${count} match${count === 1 ? '' : 'es'}`;
@@ -211,6 +246,8 @@ function buildCard(s) {
   // MC-323: surface the Only NEW toggle in saved-searches summary tags
   // for visual parity with the save-search modal summary.
   if (fdHas('is_new') && fd.is_new === 'true') tags.push(`<span class="filter-tag only-new-tag">✨ Only NEW (6h)</span>`);
+  // MC-325: surface the Price Drop toggle in saved-searches summary tags.
+  if (fdHas('price_dropped') && fd.price_dropped === 'true') tags.push(`<span class="filter-tag price-drop-tag">📉 Price drops (≥5% / 14d)</span>`);
   if (fdHas('commute_dest')) tags.push(`→ ${escapeHtml(fd.commute_dest)}`);
   if (fdHas('max_commute')) tags.push(`Commute ≤ ${escapeHtml(fd.max_commute)}m`);
   if (!tags.length) tags.push('No filters (all listings)');
@@ -248,13 +285,34 @@ function buildCard(s) {
   tpl.querySelector('[data-act=rename]').addEventListener('click', () => openRename(tpl));
   tpl.querySelector('[data-act=cancel-rename]').addEventListener('click', () => closeRename(tpl));
   tpl.querySelector('[data-role=rename-form]').addEventListener('submit', (ev) => submitRename(ev, s, tpl));
+  tpl.querySelector('[data-act=toggle-notify]').addEventListener('click', () => toggleNotify(s));
   return tpl;
+}
+
+async function toggleNotify(s) {
+  const email = getEmail();
+  const next = !(s.notify_on_match && Number(s.notify_on_match) === 1);
+  const res = await fetch(`${API}/api/saved-searches/${s.search_id}/toggle-notify`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ email, notify: next }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    msg('error', data.error || 'Failed to toggle notifications');
+    return;
+  }
+  s.notify_on_match = data.notify_on_match;
+  msg('success', next
+    ? '🔔 Email alerts enabled — you will get a daily summary of new listings matching this search.'
+    : '🔕 Email alerts disabled.');
+  loadSearches();
 }
 
 function openRename(tpl) {
   tpl.querySelector('[data-role=rename-form]').classList.add('open');
   const input = tpl.querySelector('[data-role=rename-input]');
-  input.value = tpl.querySelector('.search-name').textContent;
+  input.value = tpl.querySelector('.search-name-text').textContent;
   input.focus();
 }
 function closeRename(tpl) {

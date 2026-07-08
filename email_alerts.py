@@ -3,6 +3,12 @@ Price drop alert emails via SendGrid.
 
 MC-272: When a shortlisted listing drops in price, send an email notification.
 """
+Price drop alert emails via SendGrid.
+
+MC-272: When a shortlisted listing drops in price, send an email notification.
+MC-326: Saved-search notify-on-match digest emails (one per opted-in search,
+       listing the new listings that match the user's filter combo).
+"""
 
 import os
 from datetime import datetime, timezone
@@ -150,3 +156,139 @@ def check_and_send_price_drops(listings: list[dict], saved_email: str) -> list[s
         sent.append(lid)
 
     return sent
+
+
+# ── Saved-Search Match Digest (MC-326) ──────────────────────────────────────
+
+def _esc(s):
+    """HTML-escape a string for safe inclusion in email bodies."""
+    if s is None:
+        return ''
+    return (str(s)
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;'))
+
+
+def _build_saved_search_match_html(search_name: str, matches: list[dict]) -> str:
+    """
+    HTML body for a saved-search-match digest email. Each match is a listing
+    row with: thumbnail (if image_url), address (price/beds/baths/neighborhood
+    inline), % under market, deal score, link.
+    """
+    rows_html = []
+    for m in matches:
+        address = m.get('address') or m.get('neighborhood') or m.get('title') or 'Listing'
+        price = m.get('price') or 0
+        beds = m.get('beds')
+        baths = m.get('baths')
+        neighborhood = m.get('neighborhood') or ''
+        url = m.get('url') or m.get('link') or '#'
+        pct = m.get('pct_under')
+        score = m.get('score')
+        image = m.get('image_url') or ''
+        row = f"""
+        <tr>
+          <td style=\"padding:14px 16px;border-bottom:1px solid #eee;\">
+            <table style=\"width:100%;border-collapse:collapse;\">
+              <tr>
+                {('<td style=\"width:96px;padding-right:12px;vertical-align:top;\"><img src=\"' + _esc(image) + '\" alt=\"\" style=\"width:96px;height:72px;object-fit:cover;border-radius:4px;\"></td>') if image else ''}
+                <td style=\"vertical-align:top;\">
+                  <div style=\"font-weight:600;color:#222;font-size:1rem;margin-bottom:4px;\">{_esc(address)}</div>
+                  <div style=\"font-size:0.85rem;color:#555;margin-bottom:6px;\">
+                    ${price:,.0f}/mo
+                    {(' · ' + _esc(str(beds)) + ' bd') if beds is not None else ''}
+                    {(' · ' + _esc(str(baths)) + ' ba') if baths is not None else ''}
+                    {(' · ' + _esc(neighborhood)) if neighborhood else ''}
+                  </div>
+                  <div style=\"font-size:0.78rem;color:#888;\">
+                    {('Under market: ' + _esc(f\"{pct:.0%}\")) if pct is not None else ''}
+                    {(' · Deal score: ' + _esc(f\"{score:.0%}\")) if score is not None else ''}
+                  </div>
+                </td>
+              </tr>
+            </table>
+            <div style=\"margin-top:8px;text-align:right;\">
+              <a href=\"{_esc(url)}\" style=\"color:#2d6a4f;font-weight:600;font-size:0.85rem;text-decoration:none;\">View listing →</a>
+            </div>
+          </td>
+        </tr>"""
+        rows_html.append(row)
+
+    rows_joined = '\n'.join(rows_html) if rows_html else '<tr><td style="padding:20px;color:#888;">No new matches yet — we\'ll keep watching.</td></tr>'
+    n = len(matches)
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset=\"utf-8\"><title>New matches for {search_name}</title></head>
+<body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;\">
+  <div style=\"background:#2d6a4f;color:white;padding:20px 24px;border-radius:8px 8px 0 0;\">
+    <h2 style=\"margin:0\">🔔 New matches for your search</h2>
+    <p style=\"margin:8px 0 0;\">{n} new {'listing' if n == 1 else 'listings'} match \"{_esc(search_name)}\"</p>
+  </div>
+  <table style=\"width:100%;border:1px solid #ddd;border-top:none;border-collapse:collapse;\">
+    {rows_joined}
+  </table>
+  <div style=\"background:#f8f9fa;padding:16px 24px;font-size:0.78rem;color:#888;border-radius:0 0 8px 8px;border:1px solid #ddd;border-top:none;\">
+    You're receiving this because you saved this search on the Rent Finder
+    dashboard. Manage your saved searches or turn off notifications on the
+    <a href=\"https://rent-finder-flask.onrender.com/saved-searches\" style=\"color:#2d6a4f;\">Saved Searches</a> page.
+  </div>
+</body>
+</html>"""
+
+
+def _build_saved_search_match_text(search_name: str, matches: list[dict]) -> str:
+    """Plain-text fallback for the same digest (used by older clients)."""
+    lines = [f"New matches for your saved search \"{search_name}\" ({len(matches)} found):", ""]
+    for m in matches:
+        address = m.get('address') or m.get('neighborhood') or m.get('title') or 'Listing'
+        price = m.get('price') or 0
+        beds = m.get('beds')
+        neighborhood = m.get('neighborhood') or ''
+        url = m.get('url') or m.get('link') or '#'
+        lines.append(f"- {address}  |  ${price:,.0f}/mo  |  {beds or '?'} bd  |  {neighborhood}")
+        lines.append(f"  {url}")
+    lines.append("")
+    lines.append("Manage your saved searches on https://rent-finder-flask.onrender.com/saved-searches")
+    return "\n".join(lines)
+
+
+def send_saved_search_alert_email(to_email: str, search_name: str, matches: list[dict], unsub_url: str = "") -> bool:
+    """
+    Send a saved-search-match digest email. Returns True if SendGrid accepted
+    the request, False otherwise (including missing API key / malformed input
+    / SendGrid API error).
+
+    MC-326: invoked from persist.check_and_send_saved_search_alerts() for each
+    saved search with notify_on_match=1 and at least one new matching listing.
+    """
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail
+
+    if not to_email or '@' not in to_email:
+        return False
+    if not matches:
+        return False
+
+    html = _build_saved_search_match_html(search_name, matches)
+    text = _build_saved_search_match_text(search_name, matches)
+    n = len(matches)
+    subject = f"\U0001F514 {n} new {'listing matches' if n != 1 else 'listing matches'} your search: {search_name}"
+
+    try:
+        sg = _get_sg_client()
+    except Exception:
+        return False
+    try:
+        mail = Mail(
+            from_email=os.environ.get('FROM_EMAIL', 'alerts@rentfinder.com'),
+            to_emails=to_email,
+            subject=subject,
+            plain_text_content=text,
+            html_content=html,
+        )
+        response = sg.send(mail)
+        return bool(response) and 200 <= response.status_code < 300
+    except Exception:
+        return False

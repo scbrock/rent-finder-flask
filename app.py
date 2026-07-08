@@ -531,6 +531,9 @@ def load_deals():
                     if d:
                         deals.append(d)
                 if deals:
+                    # MC-325: Batch-enrich with price-drop fields (one SQLite
+                    # query per drop, but iterated only over the active set).
+                    deals = _enrich_price_drops(deals)
                     return deals
         except Exception:
             pass
@@ -546,6 +549,56 @@ def load_deals():
         d = _normalize_row(r)
         if d:
             deals.append(d)
+    # CSV path: price-drop enrichment still works if a SQLite DB with
+    # price_history rows is present (the live SQLite path is what populates
+    # price_history going forward via upsert_listings → upsert_price_history).
+    deals = _enrich_price_drops(deals)
+    return deals
+
+
+def _enrich_price_drops(deals: list, days: int = 14, min_drop_pct: float = 5.0) -> list:
+    """
+    MC-325: Add price_dropped / price_drop_pct / price_drop_amount /
+    price_drop_from_price / price_drop_days_ago fields to each deal dict
+    based on the price_history table. Listings with no recorded drop
+    receive price_dropped=False (and the other fields set to None).
+
+    The enrichment uses a single batched call to persist.get_all_listing_price_drops()
+    so we hit the SQLite price_history table at most once per request.
+    """
+    try:
+        from persist import get_all_listing_price_drops
+    except ImportError:
+        # If persist can't be imported (shouldn't happen, but defensive),
+        # leave the deals as-is with default fields below.
+        for d in deals:
+            d.setdefault('price_dropped', False)
+            d.setdefault('price_drop_pct', None)
+            d.setdefault('price_drop_amount', None)
+            d.setdefault('price_drop_from_price', None)
+            d.setdefault('price_drop_days_ago', None)
+        return deals
+
+    try:
+        drops = get_all_listing_price_drops(days=days, min_drop_pct=min_drop_pct)
+    except Exception:
+        drops = {}
+
+    for d in deals:
+        lid = d.get('listing_id') or ''
+        info = drops.get(lid)
+        if info:
+            d['price_dropped'] = True
+            d['price_drop_pct'] = round(info['drop_pct'], 1)
+            d['price_drop_amount'] = round(info['drop_amount'], 0)
+            d['price_drop_from_price'] = round(info['from_price'], 0)
+            d['price_drop_days_ago'] = info['days_ago_from']
+        else:
+            d['price_dropped'] = False
+            d['price_drop_pct'] = None
+            d['price_drop_amount'] = None
+            d['price_drop_from_price'] = None
+            d['price_drop_days_ago'] = None
     return deals
 
 
@@ -585,6 +638,11 @@ def api_deals():
     # is treated as "no filter" so existing callers are unaffected.
     only_new_raw = (request.args.get('is_new', '') or '').strip().lower()
     only_new = only_new_raw in ('true', '1', 'yes')
+    # MC-325: Price-dropped filter — show only listings whose current price is
+    # at least 5% lower than the oldest recorded price in the last 14 days.
+    # Accepts the same truthy/falsy values as the is_new filter for consistency.
+    price_dropped_raw = (request.args.get('price_dropped', '') or '').strip().lower()
+    price_dropped = price_dropped_raw in ('true', '1', 'yes')
 
     # Apply filters
     if beds_min is not None:
@@ -612,6 +670,10 @@ def api_deals():
     # passed so that GET /api/deals (no param) still returns everything.
     if only_new:
         deals = [d for d in deals if d.get('is_new', False) is True]
+    # MC-325: Price-dropped filter — only applied when explicit truthy value
+    # is passed. Combines cleanly with other filters (source, is_new, beds).
+    if price_dropped:
+        deals = [d for d in deals if d.get('price_dropped', False) is True]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
@@ -703,6 +765,10 @@ def api_meta():
     # next to the Only NEW toggle. Computed before any user-supplied filter
     # so the count reflects the full data set (the "what's new today" total).
     new_count = sum(1 for d in deals if d.get('is_new', False) is True)
+    # MC-325: Count of listings with a confirmed price drop in the last 14d
+    # (default 5% threshold). Used by the UI to render a "(N drops)" badge
+    # next to the Price Drop toggle so users see the total at a glance.
+    price_drop_count = sum(1 for d in deals if d.get('price_dropped', False) is True)
 
     return jsonify({
         'beds': beds_vals,
@@ -712,6 +778,7 @@ def api_meta():
         'sources': sources,
         'neighborhoods': neighborhoods,
         'new_count': new_count,
+        'price_drop_count': price_drop_count,
     })
 
 
@@ -1359,6 +1426,12 @@ def api_saved_searches_list():
             if s.get('top_match'):
                 tm = s['top_match']
                 s['top_match'] = _normalize_row(tm) if tm else None
+        # MC-326: ensure the notify_on_match + last_notification_sent fields
+        # are always exposed (defaults to 0 if the column is missing on an
+        # older DB row), so the /saved-searches UI can render the 🔔/🔕.
+        for s in searches:
+            s['notify_on_match'] = int(s.get('notify_on_match') or 0)
+            s['last_notification_sent'] = s.get('last_notification_sent')
         return jsonify({'searches': searches, 'count': len(searches)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -1424,6 +1497,15 @@ def api_saved_searches_create():
 
     try:
         from persist import upsert_saved_search
+        # MC-326: parse notify_on_match bool. Accept 1/0, true/false, "true"/"false".
+        _notify_raw = data.get('notify_on_match')
+        if _notify_raw is None:
+            notify_on_match = None  # preserve existing on conflict
+        elif isinstance(_notify_raw, bool):
+            notify_on_match = _notify_raw
+        else:
+            notify_on_match = str(_notify_raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
         search_id = upsert_saved_search(
             email=email, name=name,
             beds_min=_f(data.get('beds_min')),
@@ -1437,8 +1519,9 @@ def api_saved_searches_create():
             max_commute=_f(data.get('max_commute')),
             commute_dest=data.get('commute_dest') or None,
             filters_json=filters_json_str,
+            notify_on_match=notify_on_match,
         )
-        return jsonify({'success': True, 'search_id': search_id})
+        return jsonify({'success': True, 'search_id': search_id, 'notify_on_match': bool(notify_on_match) if notify_on_match is not None else None})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1495,6 +1578,15 @@ def api_saved_searches_update(search_id: int):
         name = (data.get('name') or '').strip()
         if not name:
             return jsonify({'error': 'name required for update'}), 400
+        # MC-326: parse notify_on_match.
+        _notify_raw = data.get('notify_on_match')
+        if _notify_raw is None:
+            notify_on_match = None
+        elif isinstance(_notify_raw, bool):
+            notify_on_match = _notify_raw
+        else:
+            notify_on_match = str(_notify_raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
         upsert_saved_search(
             email=email, name=name,
             beds_min=_f(data.get('beds_min')),
@@ -1508,6 +1600,7 @@ def api_saved_searches_update(search_id: int):
             max_commute=_f(data.get('max_commute')),
             commute_dest=data.get('commute_dest') or None,
             filters_json=filters_json_str,
+            notify_on_match=notify_on_match,
         )
         return jsonify({'success': True, 'search_id': search_id})
     except Exception as e:
@@ -1556,6 +1649,8 @@ def api_saved_searches_load():
             'commute_dest': row.get('commute_dest'),
             'filters_json': row.get('filters_json') or '{}',
             'filters_dict': row.get('filters_dict') or {},
+            'notify_on_match': int(row.get('notify_on_match') or 0),
+            'last_notification_sent': row.get('last_notification_sent'),
         }
         return jsonify({'success': True, 'search': out})
     except Exception as e:
@@ -1581,6 +1676,73 @@ def api_saved_searches_delete(search_id: int):
         else:
             return jsonify({'error': 'Not found or not yours'}), 404
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches/<int:search_id>/toggle-notify', methods=['POST'])
+def api_saved_searches_toggle_notify(search_id: int):
+    """
+    MC-326: Toggle (or set) the notify_on_match flag for a saved search.
+
+    POST body: {"email": "user@example.com", "notify": true|false}
+    Returns 200 {success, search_id, notify_on_match} on success,
+            400 if email missing or "notify" missing/invalid,
+            404 if the search id doesn't exist for that email.
+    """
+    data = request.get_json(force=True) or {}
+    email = (data.get('email') or '').strip()
+    if not email or '@' not in email:
+        return jsonify({'error': 'email required'}), 400
+    if 'notify' not in data:
+        return jsonify({'error': '"notify" field required (true|false)'}), 400
+    raw = data.get('notify')
+    if isinstance(raw, bool):
+        notify = raw
+    else:
+        s = str(raw).strip().lower()
+        if s in ('1', 'true', 'yes', 'on'):
+            notify = True
+        elif s in ('0', 'false', 'no', 'off', ''):
+            notify = False
+        else:
+            return jsonify({'error': '"notify" must be true or false'}), 400
+
+    try:
+        from persist import update_saved_search_notify
+        updated = update_saved_search_notify(search_id, email, notify)
+        if updated is None:
+            return jsonify({'error': 'Not found or not yours'}), 404
+        return jsonify({
+            'success': True,
+            'search_id': search_id,
+            'notify_on_match': int(updated.get('notify_on_match') or 0),
+            'last_notification_sent': updated.get('last_notification_sent'),
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/saved-searches/run-checks', methods=['POST'])
+def api_saved_searches_run_checks():
+    """
+    MC-326: Admin / cron endpoint that runs check_and_send_saved_search_alerts()
+    and returns the summary dict. Optional JSON body:
+      {"min_hours_between": 24, "send_fn": null}
+
+    `send_fn` is intentionally NOT exposed — the worker uses the live
+    email_alerts.send_saved_search_alert_email function (or the stub when
+    SENDGRID_API_KEY is missing). Tests POST here with monkey-patched persist
+    functions; production calls this from find_deals.py.
+    """
+    data = request.get_json(silent=True) or {}
+    min_hours = int(data.get('min_hours_between') or 24)
+    try:
+        from persist import check_and_send_saved_search_alerts
+        result = check_and_send_saved_search_alerts(min_hours_between=min_hours)
+        return jsonify({'success': True, 'result': result})
+    except Exception as e:
+        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

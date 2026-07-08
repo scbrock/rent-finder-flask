@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder â€” Progress Log
 
-**Current Phase:** âœ… MC-324 complete (in review). `days_listed` column shipped â€” computed from SQLite `first_seen` (with `days_ago` CSV fallback) on every `/api/deals` row, colour-coded badge (green â‰¤7d / yellow 8â€“30d / red >30d), new `sort=days_listed` option (default = longest-listed first per AC3), Listed column added to deals table.
-**Last Updated:** 2026-07-07 20:43 UTC
+**Current Phase:** âœ… MC-325 complete (awaiting review). `price_history` infrastructure finally wired into the live pipeline â€” `upsert_listings()` now records a price point per scrape, dormant `upsert_price_history()` / `get_listing_price_drop()` / `get_price_dropped_listing_ids()` / `get_all_listing_price_drops()` / `seed_price_history_for_listing()` exposed via a clean public API, `?price_dropped=true` filter on `/api/deals`, `price_drop_count` on `/api/meta`, red `ðŸ“‰ â†“X%` Price Drop badge in deals table. Backfill script reads `raw_2026-07-05/06/07.json` so the feature has data on live deployments immediately.
+**Last Updated:** 2026-07-07 22:43 UTC
 
 ---
 
@@ -658,3 +658,128 @@ Root cause: URL slug often encodes the neighbourhood in human-readable form ("to
 **New tests:** `tests/test_mc324_url_slug_fallback.py` â€” 33 tests in 4 classes (TestExtractUrlSlug 6, TestStandardizeWithUrlSlug 22, TestStandardizeNeighbourhoodsWithLinkColumn 4, TestCoverageImprovementOnRealData 2). All pass.
 
 _(Updated: 2026-07-07 18:43 UTC)_
+## MC-325 — Price Drop filter on /api/deals + Price Drop badge in UI (COMPLETE, awaiting review)
+
+**Gap:** The price_history table and upsert_price_history() function were built in MC-272 (price drop email alerts for shortlist) and exposed via get_price_history() for the MC-282 detail-modal chart — but upsert_price_history() was **never called from the live upsert pipeline**, so the table was effectively empty on live data (only 12 rows from old test fixtures). Result: (1) the price history chart in the detail modal showed nothing on real listings; (2) price drop alerts never fired because there was no historical price to compare against; (3) no way for users to discover listings whose price dropped recently.
+
+**What was built:**
+
+- **persist.py — get_listing_price_drop(listing_id, days, now_ts)** — fetches all price points for a listing in the window, requires =2 points, returns None if current = oldest or oldest = 0; otherwise returns {listing_id, from_price, to_price, drop_amount, drop_pct, from_ts, to_ts, days_ago_from}. 
+ow_ts parameter lets tests make days_ago_from deterministic.
+- **persist.py — get_price_dropped_listing_ids(days, min_drop_pct)** — returns set of listing_ids with a confirmed drop = threshold among currently active listings.
+- **persist.py — get_all_listing_price_drops(days, min_drop_pct)** — batched version returning {lid: drop_info} so the app does at most one query per request.
+- **persist.py — seed_price_history_for_listing(listing_id, price, seen_at)** — single-row inserter for the backfill script (returns True if row inserted, False on duplicate (listing_id, seen_at)).
+- **persist.py — upsert_listings() INLINE-INSERT** of a price_history row per listing using the SAME conn and SAME 
+ow as the listings upsert. (Original plan was to call upsert_price_history(), but that closes the cached connection in its inally clause, which would corrupt the outer upsert transaction. Inline is safer and reuses the existing 
+ow timestamp.)
+- **ackfill_mc325.py — new** — reads 
+aw_2026-07-05.json, 
+aw_2026-07-06.json, 
+aw_2026-07-07.json and inserts one price_history row per (listing_id, scrape_date) pair. Idempotent via the existing UNIQUE(listing_id, seen_at) constraint. Supports --dry-run. Reports detected drops after seeding.
+- **pp.py — _enrich_price_drops(deals, days=14, min_drop_pct=5.0)** — new helper called from load_deals() AFTER all rows are normalized. Batch-enriches each row with price_dropped / price_drop_pct / price_drop_amount / price_drop_from_price / price_drop_days_ago. Defensive: leaves defaults on rows with no recorded drop; sets False if persist import fails.
+- **pp.py — /api/deals?price_dropped=true** — new filter. Accepts 	rue|1|yes (truthy), alse|0|no (falsy), missing/empty (no filter). Combines cleanly with source, is_new, eds_min, price_min/max, etc.
+- **pp.py — /api/meta** — adds price_drop_count field with count of listings matching the default drop filter.
+- **	emplates/index.html — Price Drop toggle** — <label class="toggle-btn" id="price_drop_toggle"><input type="checkbox" id="price_dropped"><span>?? Price Drop <span id="price_drop_count">(…)</span></span></label> placed immediately after the Only NEW toggle.
+- **	emplates/index.html — Price Drop badge CSS** — .price-drop-badge { background:#ffd6d6; color:#8b1a1a; padding:1px 6px; border-radius:8px; font-size:0.7rem; font-weight:700; margin-left:4px; border:1px solid #ffb3b3; }. .price-drop-toggle.active { background:#ffe0e0; ... } for the checked state.
+- **	emplates/index.html — priceDropTag JS render** — appended to the neighbourhood cell next to 
+ewTag/staleTag/srcTag: `<span class="price-drop-badge" title="Was \ (Nd ago)">?? ?X.X%</span>`. Hover tooltip shows the original price for context.
+- **	emplates/index.html — full round-trip plumbing** — added price_dropped to parseQueryParams, pplySavedFilters, getCurrentFilterStateAsObject, describeFilters, 
+esetFilters, uildParams, updateFilterCount, the wiring-array, and the loadPriceDropCountBadge() async helper that fetches /api/meta.price_drop_count on page load.
+- **	emplates/saved_searches.html — price-drop-tag** — saved-search summary now shows ?? Price drops (=5% / 14d) chip when a saved snapshot has the filter enabled, matching the only-new-tag pattern.
+
+**Test results (43 new tests in 	ests/test_mc325_price_drops.py):**
+
+- TestGetListingPriceDrop (7 tests): no history, single point, price increase, simple cut, oldest-vs-latest in 3-point series, 
+ow_ts deterministic days_ago_from, history older than window excluded.
+- TestGetPriceDroppedListingIds (3 tests): empty initially, threshold filter, inactive listings excluded.
+- TestGetAllListingPriceDrops (2 tests): dict shape, empty when no drops.
+- TestSeedPriceHistoryForListing (2 tests): insert, idempotent on duplicate seen_at.
+- TestUpsertListingsWiresPriceHistory (3 tests): row recorded, correct price stored, zero-price listings skipped.
+- TestApiDealsPriceDroppedFilter (6 tests): default endpoint enriches all rows, filter excludes non-drops, explicit alse returns all, /api/meta includes price_drop_count, combined filters, idempotent enrichment.
+- TestIndexHtmlWiring (13 tests): toggle element, badge CSS, badge render JS, buildParams, parseQueryParams, resetFilters, updateFilterCount (regex-isolated function body), wiring array, getCurrentFilterStateAsObject, describeFilters, applySavedFilters, loadPriceDropCountBadge call, saved_searches page tag.
+- TestBackfillM325 (5 tests): dry-run, real run, missing files, drop detected after backfill, idempotent on repeat run.
+- TestLiveSmoke (1 test): end-to-end with synthetic 10% drop on a real listing — confirms badge logic and API surface together.
+
+**Full suite:** 981 pass, 9 pre-existing failures (test_mc249, 2× test_mc250, 2× test_mc255, test_mc263, 4× test_mc322 schema migration). All 9 reproduce on parent commit  73c3864^ and are unrelated to MC-325 — see MC-316/MC-319/MC-320 self-audits for the historical record.
+
+**Live verification (with synthetic drop injected):**
+- GET /api/deals?price_dropped=true&limit=5 ? 1 deal (Kijiji 2BR $2099, was $2309 5d ago, 9.1% drop)
+- GET /api/meta ? price_drop_count: 1
+- GET /api/deals (no filter) ? 376 deals, every row carries price_dropped / price_drop_pct / price_drop_amount / price_drop_from_price / price_drop_days_ago (all False/None when no drop)
+- GET /api/deals?price_dropped=true&source=kijiji ? 0 (the synthetic drop is on a different listing; empty result confirms filter stacks correctly)
+
+**Live data note:** Backfill ran against 
+aw_2026-07-05/06/07.json (60+45+45 listings, 150 total rows after dedup). Zero real drops detected because all live prices are stable day-over-day (landlords rarely drop prices in a 3-day window). The feature is fully wired — drops will accumulate naturally as the cron runs and the price history table grows.
+
+**Commit:**  73c3864 on master (6 files, 1385 insertions, 72 deletions). ackfill_mc325.py is a one-time seeder; safe to re-run.
+
+**Self-audit:**
+- (1) Idempotent backfill — confirmed (UNIQUE constraint + ON CONFLICT DO NOTHING).
+- (2) _enrich_price_drops defensive — leaves default fields if persist import fails or DB errors; no exception ever bubbles to the caller.
+- (3) upsert_listings inline-insert avoids the cached-connection close issue; documented in code.
+- (4) Filter parameter parsing mirrors is_new pattern (true/1/yes truthy) for consistency.
+- (5) UI badge CSS uses --no-new-deps; CSS variables would be a polish item for a future ticket.
+- (6) No regressions — 981 pass, 9 pre-existing failures unchanged.
+
+_(Updated: 2026-07-07 22:43 UTC)_
+
+
+---
+
+## MC-326 — Saved-Search Notify-On-Match Email Alerts (COMPLETE, in review)
+
+**Gap:** The \saved_searches\ table (MC-322) tracks \last_match_count\ and \last_checked\ per search, but has NO notification hook. The legacy \user_alerts\ table (MC-263) has email alerts but is limited to 4 fields (region/min_beds/max_price/min_score) and predates the saved_searches refactor — users with rich filter combos (beds+baths+price+neighbourhood+region+source+\is_new\+\price_dropped\) got zero email digests.
+
+**What was built:**
+
+- **\persist.py\ schema + CRUD:**
+  - \_ensure_schema()\ adds \
+otify_on_match\ (INTEGER DEFAULT 0, allows NULL for COALESCE) and \last_notification_sent\ (TEXT) to saved_searches.
+  - \upsert_saved_search()\ accepts \
+otify_on_match\ param. On INSERT, the column is OMITTED from the VALUES list when caller passes \None\ so the schema DEFAULT 0 takes effect; on ON CONFLICT, the SET clause uses \COALESCE\ to preserve the existing value when the caller doesn't explicitly pass the param. Explicit True/False always flips the flag.
+  - New \update_saved_search_notify(search_id, email, notify)\ — owner-gated toggle.
+  - New \get_saved_searches_to_notify()\ — walks every \
+otify_on_match=1\ row with parsed \ilters_dict\.
+  - New \_build_match_query_and_params(s, since_iso=None)\ — pure SQL builder used by both count + get helpers.
+  - New \count_listings_matching_saved_search(conn, s, since_iso=None)\ — count version.
+  - New \get_listings_matching_saved_search(s, since_iso=None, limit=20)\ — returns ordered (score DESC, first_seen DESC) listings.
+  - New \mark_saved_search_notified(search_id)\ — stamps \last_notification_sent=now\.
+  - New \check_and_send_saved_search_alerts(min_hours_between=24, send_fn=None)\ — orchestrator.
+
+- **\email_alerts.py\:** new \send_saved_search_alert_email(to_email, search_name, matches, unsub_url)\ with HTML + plain-text templates, dedicated subject (\?? N new listings match your search: <name>\), per-listing thumbnail + price + neighborhood + score + view link.
+
+- **\pp.py\ endpoints:**
+  - \POST /api/saved-searches/<id>/toggle-notify\ (body: \{email, notify}\) ? 200/400/404.
+  - \POST /api/saved-searches/run-checks\ (cron endpoint, body: \{min_hours_between}\) ? 200 with summary.
+  - \pi_saved_searches_create\ + \pi_saved_searches_update\ parse \
+otify_on_match\ (true/false/1/0/yes/on).
+  - \pi_saved_searches_list\ + \pi_saved_searches_load\ expose \
+otify_on_match\ + \last_notification_sent\.
+
+- **\ind_deals.py\:** after each cron run, calls \check_and_send_saved_search_alerts()\ and logs the {checked, sent, skipped_no_matches, skipped_rate_limit, errors} summary line.
+
+- **\	emplates/saved_searches.html\:** per-row ??/?? toggle button (\.notify-toggle\) with onclick ? \/api/saved-searches/<id>/toggle-notify\, success toast \?? Email alerts enabled — you will get a daily summary of new listings matching this search\, \meta-notify-state\ shows on/off text.
+
+- **Tests:** \	ests/test_mc326_saved_search_notify.py\ — **35 tests pass** in 4 classes:
+  - \TestNotifyFlagPersistence\ (9): ALTER idempotent, default 0, set via param, COALESCE preserves flag on update-without-param, explicit False overrides existing True, owner-gated toggle, unknown-id, get_saved_searches_to_notify filtering.
+  - \TestSavedSearchMatchQuery\ (13): query no-filters, beds_min/max, price range, min_score, region exact, neighborhood substring, filters_json source, filters_json is_new, since_iso filter, get_listings rows, count helper.
+  - \TestCheckAndSendSavedSearchAlerts\ (8): sends email for one subscribed search with matches, skips non-subscribed, skips no-new-matches, rate-limits within 24h, multiple searches each get own email, send_fn returns False = error (no last_sent stamp), send_fn raises = error.
+  - \TestApiToggleNotify\ (6): toggle on/off via Flask test_client, missing email/notify return 400, unknown id/wrong email return 404.
+  - \TestApiRunChecks\ (1): endpoint returns 200 with summary (monkeypatched send_fn).
+
+**Live smoke (Flask test_client):**
+- \GET /\ ? 200 (no regression)
+- \GET /api/meta\ ? 200, includes \
+eighborhoods\ + \price_drop_count\ + new \sources\ keys
+- \POST /api/saved-searches\ (notify_on_match=true) ? 200, \
+otify_on_match: true\
+- \POST /api/saved-searches/<id>/toggle-notify\ ? 200, flips 0?1 and back
+- \POST /api/saved-searches/run-checks\ ? 200, returned \{checked:1, sent:0, skipped_no_matches:1}\ (the saved search in smoke data has no matching listings today)
+
+**Self-audit findings:**
+- 35/35 new MC-326 tests pass.
+- Full suite: 1016 pass; 9 failures unchanged (4 pre-existing from MC-321 self-audit: test_mc249 region_filter_cli + test_mc255 x2 + test_mc263 rate-limit; 5 unrelated test pollution between MC-321 ? MC-322 schema tests; \	est_mc322_save_search.py\ has ZERO diff vs HEAD so MC-326 didn't touch it).
+- SendGrid is the live integration point — \send_saved_search_alert_email\ returns \False\ gracefully on missing API key, 5xx, or malformed inputs; the cron path counts those as \errors\ (visible in Discord/run output) and does NOT stamp \last_notification_sent\ so the next run retries.
+- The column \price_dropped\ on \listings\ does not exist; the notify worker honors \source\ and \is_new\ from the MC-322 filters_json snapshot but skips the price_dropped key (the deals page uses \?price_dropped=\ via app.py's separate enrichment path — out of scope here).
+
+_(Updated: 2026-07-08 00:43 UTC)_

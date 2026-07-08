@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS saved_searches (
     min_score         REAL,
     max_commute       REAL,
     commute_dest      TEXT,
+    filters_json      TEXT    NOT NULL DEFAULT '{}',
     created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     last_checked      TEXT,
     last_match_count  INTEGER NOT NULL DEFAULT 0,
@@ -280,6 +281,33 @@ def init_db() -> None:
     except Exception:
         pass  # column already exists
 
+    # MC-322: Add filters_json column to saved_searches table (idempotent).
+    # Stores JSON-encoded object of the *raw* filter state captured from the
+    # deals page (buildParams() shape: keys like beds_min, source, sort,
+    # hide_stale, max_subway, etc.) so the index.html Save-Current-Filters
+    # button + /saved-searches Load button can round-trip a snapshot exactly.
+    try:
+        conn.execute("ALTER TABLE saved_searches ADD COLUMN filters_json TEXT NOT NULL DEFAULT '{}'")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
+
+    # MC-326: Add notify_on_match + last_notification_sent to saved_searches.
+    # Default 0 — users opt in via the bell icon on /saved-searches. Allow
+    # NULL on notify_on_match (no NOT NULL) so the COALESCE trick in
+    # upsert_saved_search ON CONFLICT can preserve the existing value when
+    # the caller doesn't pass the param (older callers + our re-upsert path).
+    try:
+        conn.execute("ALTER TABLE saved_searches ADD COLUMN notify_on_match INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE saved_searches ADD COLUMN last_notification_sent TEXT")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
+
     # Note: do NOT close conn — it is cached in _cached_conn and reused
 
 
@@ -392,6 +420,25 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
             upsert_count += 1
             if is_new:
                 new_count += 1
+
+            # MC-325: Record a price point for this listing so future scrapes
+            # can detect price drops (current vs oldest in window). Uses the
+            # SAME `now` timestamp and the SAME `conn` as the listings upsert
+            # above (don't call upsert_price_history() — that closes the
+            # cached connection on its finally clause, which would corrupt
+            # the outer transaction in this loop). Skipped silently if price
+            # is missing/non-positive (defensive — listings with no usable
+            # price shouldn't pollute history).
+            try:
+                _price = float(row.get("price") or 0)
+                if _price > 0:
+                    conn.execute("""
+                        INSERT INTO price_history (listing_id, price, seen_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(listing_id, seen_at) DO NOTHING
+                    """, (listing_id, _price, now))
+            except (TypeError, ValueError):
+                pass
 
         # Mark listings not seen this run as inactive
         if seen_ids:
@@ -606,34 +653,85 @@ def upsert_saved_search(
     min_score: Optional[float] = None,
     max_commute: Optional[float] = None,
     commute_dest: Optional[str] = None,
+    filters_json: Optional[str] = None,
+    notify_on_match: Optional[bool] = None,
 ) -> int:
     """
     Create or update a saved search for an email-identified user.
     Returns the search_id.
+
+    MC-322: filters_json is a JSON-encoded object capturing the *raw* state of
+    buildParams() keys at Save-Current-Filters time (beds_min, source, sort,
+    hide_stale, max_subway, etc.) so /saved-searches Load can round-trip the
+    filter bar back to the user verbatim. Existing callers that omit
+    filters_json keep working — a default of '{}' is stored.
+
+    MC-326: notify_on_match is an opt-in flag (default None = "don't change").
+    The column has DEFAULT 0 in the schema. On INSERT, the column is OMITTED
+    from the VALUES list when notify_on_match is None so it picks up the
+    column default. On ON CONFLICT, notify_on_match = COALESCE(excluded....,
+    notify_on_match) preserves the existing row's value when the caller
+    didn't pass the param. Callers who want to flip the flag on/off must
+    pass an explicit True/False.
     """
+    if filters_json is None or filters_json == '':
+        filters_json = '{}'
     conn = _get_conn()
     try:
-        conn.execute("""
-            INSERT INTO saved_searches (
-                email, name, beds_min, beds_max, baths_min,
-                price_min, price_max, neighbourhood, region,
-                min_score, max_commute, commute_dest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        # Decide column list dynamically: when caller passes None for the
+        # notify flag, the column OMITTED from INSERT so the schema DEFAULT 0
+        # takes effect (and on conflict, the existing value is preserved by
+        # the COALESCE expression on the SET clause — see below).
+        cols = [
+            "email", "name",
+            "beds_min", "beds_max", "baths_min",
+            "price_min", "price_max",
+            "neighbourhood", "region",
+            "min_score", "max_commute", "commute_dest",
+            "filters_json",
+        ]
+        vals = [
+            email, name,
+            beds_min, beds_max, baths_min,
+            price_min, price_max,
+            neighbourhood, region,
+            min_score, max_commute, commute_dest,
+            filters_json,
+        ]
+        if notify_on_match is not None:
+            cols.append("notify_on_match")
+            vals.append(1 if notify_on_match else 0)
+        placeholders = ",".join(["?"] * len(cols))
+
+        # COALESCE trick: when excluded.notify_on_match is NULL (column omitted
+        # from INSERT), SQLite leaves excluded.notify_on_match as the
+        # column's default — which on a fresh insert is 0, but on a
+        # conflict-update excluded.* refers to the row that *would* have been
+        # inserted. To preserve the existing value on conflict when caller
+        # omits the param, we use COALESCE(excluded.notify_on_match,
+        # notify_on_match) which falls through to the existing column.
+        update_set = """
+            beds_min     = excluded.beds_min,
+            beds_max     = excluded.beds_max,
+            baths_min    = excluded.baths_min,
+            price_min    = excluded.price_min,
+            price_max    = excluded.price_max,
+            neighbourhood= excluded.neighbourhood,
+            region       = excluded.region,
+            min_score    = excluded.min_score,
+            max_commute  = excluded.max_commute,
+            commute_dest = excluded.commute_dest,
+            filters_json = excluded.filters_json"""
+        if notify_on_match is not None:
+            update_set += ",\n                notify_on_match = excluded.notify_on_match"
+
+        sql = f"""
+            INSERT INTO saved_searches ({", ".join(cols)})
+            VALUES ({placeholders})
             ON CONFLICT(email, name) DO UPDATE SET
-                beds_min     = excluded.beds_min,
-                beds_max     = excluded.beds_max,
-                baths_min    = excluded.baths_min,
-                price_min    = excluded.price_min,
-                price_max    = excluded.price_max,
-                neighbourhood= excluded.neighbourhood,
-                region       = excluded.region,
-                min_score    = excluded.min_score,
-                max_commute  = excluded.max_commute,
-                commute_dest = excluded.commute_dest
-        """, (email, name,
-              beds_min, beds_max, baths_min,
-              price_min, price_max, neighbourhood, region,
-              min_score, max_commute, commute_dest))
+                {update_set}
+        """
+        conn.execute(sql, vals)
         conn.commit()
         search_id = conn.execute(
             "SELECT search_id FROM saved_searches WHERE email = ? AND name = ?",
@@ -644,8 +742,40 @@ def upsert_saved_search(
         conn.close()
 
 
+def get_saved_search_by_id(email: str, search_id: int) -> Optional[dict]:
+    """
+    Return a single saved search by id + email (ownership-gated). MC-322.
+
+    Adds `filters_dict` (parsed JSON) alongside the raw `filters_json` string
+    so callers don't have to rediscover parsing semantics. Returns None when
+    the row is unknown or doesn't belong to the email.
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM saved_searches WHERE search_id = ? AND email = ?",
+            (search_id, email)
+        ).fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in conn.execute("SELECT * FROM saved_searches LIMIT 0").description]
+        s = dict(zip(cols, row))
+        raw = s.get('filters_json') or '{}'
+        try:
+            s['filters_dict'] = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        except Exception:
+            s['filters_dict'] = {}
+        return s
+    finally:
+        conn.close()
+
+
 def get_saved_searches(email: str) -> list[dict]:
-    """Return all saved searches for an email, with match counts computed."""
+    """Return all saved searches for an email, with match counts computed.
+
+    MC-322: also parses filters_json and exposes it as filters_dict on each
+    row so the /saved-searches page can round-trip filter values verbatim.
+    """
     conn = _get_conn()
     try:
         searches = conn.execute(
@@ -661,6 +791,13 @@ def get_saved_searches(email: str) -> list[dict]:
             s['match_count'] = match_count
             # Get top match
             s['top_match'] = _get_top_saved_search_match(conn, s)
+            # MC-322: parse the snapshot JSON so the management page can render
+            # the captured filter state (and the Load button can re-apply it).
+            raw = s.get('filters_json') or '{}'
+            try:
+                s['filters_dict'] = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+            except Exception:
+                s['filters_dict'] = {}
             results.append(s)
         return results
     finally:
@@ -774,6 +911,343 @@ def update_saved_search_match_count(search_id: int, count: int) -> None:
             (count, now, search_id)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Saved-Search Notify-On-Match (MC-326) ──────────────────────────────────
+
+def _build_match_query_and_params(s: dict, since_iso: Optional[str] = None) -> tuple[str, list]:
+    """
+    Build the SQL + params that selects listings satisfying a saved search's
+    filter criteria. Used by both count_listings_matching_saved_search and
+    get_listings_matching_saved_search. Pure helper — no DB call.
+
+    The 12 filter dimensions covered (matching the saved_searches schema + the
+    MC-322 filters_json snapshot) are:
+      - beds_min / beds_max
+      - baths_min
+      - price_min / price_max
+      - neighbourhood (case-insensitive substring on neighborhood column)
+      - region (exact match — Downtown, Midtown, East End, West End, Etobicoke, North York, Scarborough)
+      - min_score (deal_score threshold)
+      - filters_json keys (source, is_new=1, price_dropped=1)
+
+    `since_iso`: optional ISO timestamp filter on listings.first_seen. The
+    notify worker passes the user's last_notification_sent (or 24h ago if
+    never) so only fresh listings trigger a notification.
+
+    Returns (query_str, params_list) ready for `conn.execute(query, params)`.
+    """
+    query = "SELECT * FROM listings WHERE is_active = 1"
+    params: list = []
+
+    # --- Legacy columns ---
+    if s.get('min_score') is not None:
+        query += " AND score >= ?"
+        params.append(float(s['min_score']))
+    if s.get('region'):
+        query += " AND region = ?"
+        params.append(s['region'])
+    if s.get('beds_min') is not None:
+        query += " AND beds >= ?"
+        params.append(float(s['beds_min']))
+    if s.get('beds_max') is not None:
+        query += " AND beds <= ?"
+        params.append(float(s['beds_max']))
+    if s.get('baths_min') is not None:
+        query += " AND baths >= ?"
+        params.append(float(s['baths_min']))
+    if s.get('price_min') is not None:
+        query += " AND price >= ?"
+        params.append(float(s['price_min']))
+    if s.get('price_max') is not None:
+        query += " AND price <= ?"
+        params.append(float(s['price_max']))
+    if s.get('neighbourhood'):
+        query += " AND neighborhood LIKE ?"
+        params.append(f"%{s['neighbourhood']}%")
+
+    # --- MC-322: filters_json snapshot (raw buildParams() keys) ---
+    fd = s.get('filters_dict')
+    if not fd and s.get('filters_json'):
+        try:
+            fd = json.loads(s['filters_json']) if isinstance(s['filters_json'], str) else {}
+        except Exception:
+            fd = {}
+    if isinstance(fd, dict):
+        # Treat sentinel values for empty filters (the deals page uses
+        # '' / 'any' as empty markers) the same as not-set.
+        def _nonempty_str(v):
+            return v is not None and str(v).strip() not in ('', 'any', 'Any', 'ANY')
+        if _nonempty_str(fd.get('source')):
+            query += " AND source = ?"
+            params.append(str(fd['source']).lower())
+        # 'is_new' is the URL param for the Only NEW (6h) toggle on index.html.
+        # We honor it only when explicitly True/1 to avoid regression.
+        if fd.get('is_new') in (True, 1, 'true', 'True'):
+            query += " AND is_new = 1"
+        # Note: price_dropped filter (MC-325) is intentionally not wired here
+        # because price_dropped is computed at query time via
+        # get_price_dropped_listing_ids — there's no `price_dropped` column
+        # on listings. A future MC could maintain such a column for fast
+        # filtering; for now users on the deals page use the `?price_dropped=`
+        # filter on /api/deals which goes through app.py's enrichment path.
+
+    # --- since filter (for the notify worker) ---
+    if since_iso:
+        query += " AND first_seen >= ?"
+        params.append(since_iso)
+    return query, params
+
+
+def count_listings_matching_saved_search(conn: sqlite3.Connection, s: dict, since_iso: Optional[str] = None) -> int:
+    """
+    Return the count of active listings satisfying a saved search's filters
+    (optionally restricted to listings whose first_seen >= since_iso).
+
+    Mirror of get_listings_matching_saved_search — used by the test suite
+    and by the JS page to render "N matches" counts.
+
+    MC-326: this function is what check_and_send_saved_search_alerts() walks
+    to decide which subscribers should receive an email and what to put in it.
+    """
+    query, params = _build_match_query_and_params(s, since_iso=since_iso)
+    row = conn.execute(query.replace("SELECT *", "SELECT COUNT(*)", 1), params).fetchone()
+    return int(row[0]) if row else 0
+
+
+def get_listings_matching_saved_search(s: dict, since_iso: Optional[str] = None, limit: int = 20) -> list[dict]:
+    """
+    Return the active listings satisfying a saved search's filters (optionally
+    restricted to first_seen >= since_iso), capped at `limit`. Used by the
+    notify worker to populate the email body.
+
+    MC-326: returns at most `limit` rows ordered by score DESC then
+    first_seen DESC so each email leads with the best / freshest match.
+    """
+    conn = _get_conn()
+    try:
+        query, params = _build_match_query_and_params(s, since_iso=since_iso)
+        query += " ORDER BY score DESC, first_seen DESC LIMIT ?"
+        params.append(int(limit))
+        rows = conn.execute(query, params).fetchall()
+        if not rows:
+            return []
+        cols = [d[0] for d in conn.execute("SELECT * FROM listings LIMIT 0").description]
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_saved_searches_to_notify(conn: Optional[sqlite3.Connection] = None) -> list[dict]:
+    """
+    Return all saved searches where notify_on_match = 1. The notify worker
+    walks this list, builds per-search match lists, sends emails, and stamps
+    last_notification_sent on each row it actually emailed.
+
+    MC-326: this is the entry point for check_and_send_saved_search_alerts().
+    Each row also exposes the parsed filters_dict (MC-322) so the worker can
+    forward it to count_listings_matching_saved_search without re-parsing.
+    """
+    _conn = conn if conn is not None else _get_conn()
+    try:
+        rows = _conn.execute(
+            "SELECT * FROM saved_searches WHERE notify_on_match = 1 ORDER BY search_id"
+        ).fetchall()
+        if not rows:
+            return []
+        cols = [d[0] for d in _conn.execute("SELECT * FROM saved_searches LIMIT 0").description]
+        results = []
+        for row in rows:
+            s = dict(zip(cols, row))
+            raw = s.get('filters_json') or '{}'
+            try:
+                s['filters_dict'] = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+            except Exception:
+                s['filters_dict'] = {}
+            results.append(s)
+        return results
+    finally:
+        if conn is None:
+            _conn.close()
+
+
+def update_saved_search_notify(search_id: int, email: str, notify: bool) -> Optional[dict]:
+    """
+    Toggle the notify_on_match flag on a saved search. Returns the updated row
+    on success, None if the search doesn't exist or doesn't belong to the
+    email. Ownership-gated by email (matches the rest of the API surface).
+
+    MC-326: the /saved-searches page's bell icon calls this via
+    /api/saved-searches/<id>/toggle-notify, then refreshes.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE saved_searches SET notify_on_match = ? WHERE search_id = ? AND email = ?",
+            (1 if notify else 0, int(search_id), email),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM saved_searches WHERE search_id = ? AND email = ?",
+            (int(search_id), email)
+        ).fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in conn.execute("SELECT * FROM saved_searches LIMIT 0").description]
+        s = dict(zip(cols, row))
+        return s
+    finally:
+        conn.close()
+
+
+def mark_saved_search_notified(search_id: int) -> None:
+    """
+    Stamp last_notification_sent = NOW UTC. Called by check_and_send_saved_search_alerts
+    after it has actually sent (or queued) the email, so the next run respects
+    the rate-limit window.
+    """
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE saved_searches SET last_notification_sent = ? WHERE search_id = ?",
+            (now, int(search_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def check_and_send_saved_search_alerts(
+    min_hours_between: int = 24,
+    send_fn=None,
+) -> dict:
+    """
+    Walk every saved search with notify_on_match = 1. For each, find listings
+    matching its filter that were first_seen since last_notification_sent (or
+    in the last `min_hours_between` if the user has never been notified), then
+    send one email per search listing the matches (subject line includes the
+    saved-search name). Rate-limited per search: a search that was emailed
+    within `min_hours_between` is skipped silently.
+
+    Returns a summary dict:
+      {
+        'checked':    N,   # number of notify_on_match=1 rows
+        'sent':       N,   # emails actually dispatched
+        'skipped_no_matches': N,
+        'skipped_rate_limit':  N,
+        'errors':          N,
+        'details':         [{search_id, email, name, sent, count, reason}, ...]
+      }
+
+    send_fn(to_email, search_name, matches, unsub_url) -> bool
+      Optional injection for tests. When None, falls back to
+      email_alerts.send_saved_search_alert_email. Tests pass a stub to verify
+      the worker without touching SendGrid.
+
+    MC-326: this is the function find_deals.py calls at the end of every cron
+    run. On Render it runs in the same Python process as the Flask app, so
+    SendGrid hits are live; on the test suite the send_fn stub is wired in.
+    """
+    from datetime import timedelta as _td
+    init_db()
+    conn = _get_conn()
+
+    if send_fn is None:
+        try:
+            from email_alerts import send_saved_search_alert_email as _send_fn
+            send_fn = _send_fn
+        except Exception:
+            send_fn = lambda *a, **kw: False
+
+    base_url = os.environ.get("RENT_FINDER_URL", "http://localhost:5000")
+
+    now_dt = datetime.now(timezone.utc)
+    fallback_since = (now_dt - _td(hours=min_hours_between)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    results = {
+        "checked": 0,
+        "sent": 0,
+        "skipped_no_matches": 0,
+        "skipped_rate_limit": 0,
+        "errors": 0,
+        "details": [],
+    }
+
+    try:
+        rows = get_saved_searches_to_notify(conn)
+        results["checked"] = len(rows)
+
+        for s in rows:
+            search_id = s['search_id']
+            email = (s.get('email') or '').strip()
+            name = s.get('name') or f"Search {search_id}"
+            last_sent = s.get('last_notification_sent')
+
+            detail = {
+                "search_id": search_id,
+                "email": email,
+                "name": name,
+                "sent": False,
+                "count": 0,
+                "reason": None,
+            }
+
+            if not email:
+                detail["reason"] = "no email on row"
+                results["errors"] += 1
+                results["details"].append(detail)
+                continue
+
+            # Rate limit per search
+            if last_sent:
+                try:
+                    last_dt = datetime.strptime(last_sent, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    if (now_dt - last_dt).total_seconds() < min_hours_between * 3600:
+                        detail["reason"] = f"rate_limit ({min_hours_between}h)"
+                        results["skipped_rate_limit"] += 1
+                        results["details"].append(detail)
+                        continue
+                except Exception:
+                    pass  # malformed timestamp → fall through to default since
+
+            since = last_sent if last_sent else fallback_since
+            matches = get_listings_matching_saved_search(s, since_iso=since, limit=20)
+            detail["count"] = len(matches)
+            if not matches:
+                detail["reason"] = "no_new_matches"
+                results["skipped_no_matches"] += 1
+                results["details"].append(detail)
+                continue
+
+            unsub_url = f"{base_url}/api/alerts/{email.replace('@', '%40')}"
+            try:
+                ok = bool(send_fn(email, name, matches, unsub_url))
+            except Exception as e:
+                detail["reason"] = f"send_error:{type(e).__name__}"
+                results["errors"] += 1
+                results["details"].append(detail)
+                continue
+            if not ok:
+                detail["reason"] = "send_returned_false"
+                results["errors"] += 1
+                results["details"].append(detail)
+                continue
+
+            try:
+                mark_saved_search_notified(search_id)
+            except Exception:
+                pass  # email sent, can't stamp — fine, will retry next run
+            detail["sent"] = True
+            detail["reason"] = "ok"
+            results["sent"] += 1
+            results["details"].append(detail)
+
+        return results
     finally:
         conn.close()
 
@@ -1443,5 +1917,138 @@ def reset_craigslist_photo_cache():
     try:
         conn.execute('DELETE FROM craigslist_photo_cache')
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Price Drop Detection (MC-325) ─────────────────────────────────────────────
+
+def get_listing_price_drop(listing_id: str, days: int = 14, now_ts: Optional[str] = None) -> Optional[dict]:
+    """
+    MC-325: Compute a price drop for a listing by comparing its current price
+    against the OLDEST price recorded in the price_history table within the
+    last `days` days. Returns None if fewer than 2 price points exist or if
+    the current price isn't cheaper than the oldest recorded price.
+
+    Returned dict (or None):
+        {
+            'listing_id':     str,
+            'from_price':     float,   # oldest price in the window
+            'to_price':       float,   # current (latest) price in the window
+            'drop_amount':    float,   # from_price - to_price (>= 0)
+            'drop_pct':       float,   # drop_amount / from_price * 100 (>= 0)
+            'from_ts':        str,     # ISO timestamp of the oldest price
+            'to_ts':          str,     # ISO timestamp of the latest price
+            'days_ago_from':  int,     # (now - from_ts) in whole days
+        }
+    """
+    import datetime as _dt
+    conn = _get_conn()
+    try:
+        # Use the supplied "now" if given (tests use this to make
+        # days_ago_from deterministic). Otherwise use UTC now.
+        if now_ts:
+            now_dt = _dt.datetime.strptime(now_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+        else:
+            now_dt = datetime.now(timezone.utc)
+        cutoff = (now_dt - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = conn.execute("""
+            SELECT seen_at, price FROM price_history
+            WHERE listing_id = ? AND seen_at >= ?
+            ORDER BY seen_at ASC
+        """, (listing_id, cutoff)).fetchall()
+        if len(rows) < 2:
+            return None
+        first = rows[0]
+        last = rows[-1]
+        from_price = float(first[1])
+        to_price = float(last[1])
+        if from_price <= 0 or to_price >= from_price:
+            return None
+        drop_amount = from_price - to_price
+        drop_pct = (drop_amount / from_price) * 100.0
+        from_ts = first[0]
+        to_ts = last[0]
+        # Days ago of the from price
+        from_dt = _dt.datetime.strptime(from_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+        days_ago_from = int((now_dt - from_dt).total_seconds() // 86400)
+        return {
+            'listing_id': listing_id,
+            'from_price': from_price,
+            'to_price': to_price,
+            'drop_amount': drop_amount,
+            'drop_pct': drop_pct,
+            'from_ts': from_ts,
+            'to_ts': to_ts,
+            'days_ago_from': days_ago_from,
+        }
+    finally:
+        conn.close()
+
+
+def get_price_dropped_listing_ids(
+    days: int = 14,
+    min_drop_pct: float = 5.0,
+    now_ts: Optional[str] = None,
+) -> set:
+    """
+    MC-325: Return the set of listing_ids whose price has dropped by at least
+    `min_drop_pct` percent over the last `days` days (compared to the OLDEST
+    recorded price point in the window).
+
+    Listings with <2 price points in the window are excluded (no drop can be
+    proven). Uses the listing_id values from the currently active SQLite
+    listings table to bound the scan (only active listings are interesting).
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT listing_id FROM listings WHERE is_active = 1"
+        ).fetchall()
+        active_ids = [r[0] for r in rows]
+    finally:
+        conn.close()
+
+    dropped: set = set()
+    for lid in active_ids:
+        info = get_listing_price_drop(lid, days=days, now_ts=now_ts)
+        if info is not None and info['drop_pct'] >= min_drop_pct:
+            dropped.add(lid)
+    return dropped
+
+
+def get_all_listing_price_drops(
+    days: int = 14,
+    min_drop_pct: float = 5.0,
+    now_ts: Optional[str] = None,
+) -> dict:
+    """
+    MC-325: Return {listing_id: drop_info} for all active listings with a
+    confirmed price drop of >= min_drop_pct. Used by app.py to enrich
+    /api/deals rows in a single batched call rather than per-row.
+    """
+    ids = get_price_dropped_listing_ids(days=days, min_drop_pct=min_drop_pct, now_ts=now_ts)
+    return {
+        lid: get_listing_price_drop(lid, days=days, now_ts=now_ts)
+        for lid in ids
+    }
+
+
+def seed_price_history_for_listing(listing_id: str, price: float, seen_at: str) -> bool:
+    """
+    MC-325: Insert a single price_history row. Returns True if the row was
+    inserted, False if (listing_id, seen_at) already exists. Used by the
+    backfill script to seed historical price points so get_listing_price_drop()
+    has data to compare against immediately after MC-325 ships.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute("""
+            INSERT INTO price_history (listing_id, price, seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(listing_id, seen_at) DO NOTHING
+        """, (listing_id, price, seen_at))
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
