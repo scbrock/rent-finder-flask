@@ -1015,6 +1015,63 @@ def neighborhood_page(slug):
     return render_template('neighborhood.html', slug=slug)
 
 
+# ── MC-328: Neighborhood price trend chart ───────────────────────────────────
+
+@app.route('/api/neighborhoods/<slug>/price-history')
+def api_neighborhood_price_history(slug):
+    """Per-neighbourhood price trend over the last N days.
+
+    GET /api/neighborhoods/<slug>/price-history?days=30
+
+    Returns:
+      {
+        'neighborhood': str,
+        'slug':         str,
+        'days':         int,
+        'days_of_data': int,           # number of distinct days with >=1 data point
+        'series':       [
+          {
+            'date_iso':              'YYYY-MM-DD',
+            'median_price':          float | None,
+            'median_price_per_sqft': float | None,
+            'listing_count':         int,
+            'dollar_per_sqft_min':   float | None,
+            'dollar_per_sqft_max':   float | None,
+          },
+          ...
+        ]
+      }
+
+    404 if the slug does not resolve to any active neighbourhood (matches
+    the convention used by /api/neighborhoods/<slug>/stats).
+    Empty `series` is a valid 200 response — the page shows its empty-state
+    UI for "not enough data yet".
+    """
+    days = request.args.get('days', '30')
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 30
+    # Clamp to a sensible range — the chart is meant to be a small sparkline,
+    # not a multi-year deep dive.
+    days = max(1, min(days, 365))
+
+    deals = load_deals()
+    name = _slug_to_neighborhood(deals, slug)
+    if not name:
+        return jsonify({'error': 'neighborhood not found', 'slug': slug}), 404
+
+    from persist import get_neighborhood_price_history
+    series = get_neighborhood_price_history(name, days=days)
+    return jsonify({
+        'neighborhood': name,
+        'slug': slug,
+        'days': days,
+        'days_of_data': len(series),
+        'series': series,
+    })
+
+
 # ── MC-259: Listing Detail Page ───────────────────────────────────────────────
 
 @app.route('/api/listing/detail')

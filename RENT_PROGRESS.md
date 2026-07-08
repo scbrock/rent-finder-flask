@@ -1,7 +1,7 @@
 # Toronto Rent Deal Finder â€” Progress Log
 
-**Current Phase:** âœ… MC-327 complete (in review). Price-per-square-foot ($/sqft) shipped as a first-class metric alongside price â€” universal value signal for renters. `_normalize_row` emits `price_per_sqft` (None-safe, 2-decimal) + `price_per_sqft_str` + `price_per_sqft_class` (cheap/fair/expensive color buckets). `/api/deals` accepts `?price_per_sqft_max=N` (null pps excluded; invalid/0 no-op) + `?sort=price_per_sqft` (asc, nulls last). `/api/meta` exposes `price_per_sqft_stats` = `{count_with_sqft, count_without_sqft, min, max, median, p25, p75}`. UI: $/sqft column with color-coded badge after Price, Max $/sqft filter input wired through `buildParams/parseQueryParams/resetFilters/applySavedFilters/describeFilters/getCurrentFilterStateAsObject/updateFilterCount/wiring array`, "Lowest $/sqft" sort option in dropdown. 36/36 new tests pass.
-**Last Updated:** 2026-07-08 04:43 UTC
+**Current Phase:** âœ… MC-328 in review. Per-neighbourhood 30-day price-trend chart shipped on the drill-down page (`/api/neighborhoods/<slug>/price-history` + Chart.js line charts in `templates/neighborhood.html`). 35/35 MC-328 tests pass; 0 regressions in MC-320/321/325/327/test_app.
+**Last Updated:** 2026-07-08 06:55 UTC
 
 ---
 
@@ -783,3 +783,61 @@ otify_on_match: true\
 - The column \price_dropped\ on \listings\ does not exist; the notify worker honors \source\ and \is_new\ from the MC-322 filters_json snapshot but skips the price_dropped key (the deals page uses \?price_dropped=\ via app.py's separate enrichment path ï¿½ out of scope here).
 
 _(Updated: 2026-07-08 00:43 UTC)_
+
+
+---
+
+## MC-328 — Per-Neighbourhood 30-day Price Trend Chart on Drill-Down Page (COMPLETE, in review)
+
+**Gap:** MC-321 shipped a neighbourhood drill-down page with stats cards and top-5 deals, and MC-325 wired price_history into the live pipeline (164 rows live as of last run). But the drill-down page didn't surface the trend — users had to infer 'is this neighbourhood trending up or down?' from the median price card alone, which is a single point in time. Surfacing a small 30-day trend chart closes that loop without needing any new data sources.
+
+**What was built:**
+
+- **persist.py get_neighborhood_price_history(neighborhood, days=30, now_ts=None) (~125 lines):**
+  - Joins price_history ? listings (active only) on listing_id, filtered by neighbourhood (case-insensitive) and a UTC day-window cutoff.
+  - Buckets rows by calendar day (UTC) in Python (not SQL) so the per-day $/sqft median over NULLs is straightforward.
+  - Returns [{date_iso, median_price, median_price_per_sqft, listing_count, dollar_per_sqft_min, dollar_per_sqft_max}, …] sorted ascending by date.
+  - Defensive: skips NULL/garbage/zero/negative prices, skips listings without sqft from $/sqft calculations (but still counts them in listing_count), case-insensitive neighbourhood match, returns [] for empty/unknown neighbourhood (not None).
+  - 
+ow_ts parameter exposed for deterministic tests.
+
+- **pp.py GET /api/neighborhoods/<slug>/price-history?days=30 (~50 lines):**
+  - Resolves slug ? canonical neighbourhood name via the existing _slug_to_neighborhood helper (reuses the same lookup the stats endpoint uses — same 404 convention).
+  - Defaults days=30; clamps to [1, 365]; garbage strings fall back to 30.
+  - Returns {neighborhood, slug, days, days_of_data, series: [...]}. Empty series is a valid 200 response — page shows 'Not enough data yet'.
+
+- **	emplates/neighborhood.html (+~165 lines):**
+  - Chart.js loader added to <head> (chart.js@4.4.0/dist/chart.umd.min.js — same version used by index.html's listing-detail chart).
+  - New <section class='trend-section'> between Beds Breakdown and Top Deals, containing:
+    - Sub-header line with a colored pill: '? +X% over window' / '? -X% over window' / '— Stable' (computed from first/last median prices).
+    - Two canvases (#nbhd_trend_chart, #nbhd_pps_trend_chart) in a responsive 2-column grid.
+    - Empty-state block 'Not enough data yet — need at least 2 days of price history to draw a trend.'
+  - New loadTrend(neighborhood) async function: independent fetch so a 5xx here cannot take down the page. Destroys old Chart instances before re-rendering (handles re-loads gracefully). Hides the right column entirely if no $/sqft data exists (instead of a blank canvas).
+  - Module-scoped _nbhdTrendChart / _nbhdPpsTrendChart to track instances across re-renders.
+  - Y-axis currency formatter ($1,234), tooltip callbacks, spanGaps: true so a single missing day doesn't break the line.
+
+- **Tests: 	ests/test_mc328_nbhd_trend.py — 35 tests in 4 classes:**
+  - TestGetNeighborhoodPriceHistory (15): empty/unknown/inactive/neighbourhood-less; single-day + multi-day aggregation; case-insensitive match; listings-without-sqft excluded from $/sqft; all-no-sqft ? null pps; days window respected; within-day uses all listings not just distinct; NULL price defensive; zero/negative price skipped.
+  - TestApiNeighborhoodPriceHistoryEndpoint (9): 404 unknown slug; 200 known slug + full response shape; series row shape (6 keys); default days=30; custom days param; garbage days ? 30 fallback; clamp min=1 (including days=0, days=-5); clamp max=365; empty history ? 200 + empty series.
+  - TestNeighborhoodHtmlTrendSection (8): Chart.js loader present; both canvases (
+bhd_trend_chart, 
+bhd_pps_trend_chart); trend-section container + trend-grid + trend-empty elements; /price-history endpoint called from JS; empty-state copy; 
+ew Chart( instantiation; sub-header pill CSS class + copy.
+  - TestEmptyAndEdgeCases (3): unknown slug does not 500 (404, JSON); neighborhood page 200 with no listings; neighborhood page 200 for known slug.
+
+**Test coverage: 35/35 MC-328 tests pass; 0 regressions in MC-320/321/325/327/test_app (186/186 across these test files).**
+
+**Live verification (Flask test_client against live DB at data/listings.db):**
+- GET /api/deals ? 200, deals have 
+eighborhood_slug for known neighbourhoods
+- GET /api/neighborhoods/agincourt-north/price-history?days=30 ? 200, days_of_data=2, two real rows from 2026-07-02 (.90 median, .89/sqft) and 2026-07-07 (.00 median, .62/sqft) — clear downward trend visible in the data
+- GET /api/neighborhoods/toronto/price-history?days=30 ? 200, empty series (Toronto has no price_history rows yet) — page would show empty state
+- GET /api/neighborhoods/lansing-westgate/price-history?days=30 ? 200, empty series (same reason)
+- GET /api/neighborhoods/atlantis/price-history?days=30 ? 404 {'error':'neighborhood not found','slug':'atlantis'}
+- GET /neighborhood/agincourt-north ? 200, 21388 bytes, body contains 
+bhd_trend_chart, chart.umd.min.js, 
+ew Chart(, /price-history — page renders with the trend section wired correctly
+
+**Note on neighborhood.html:** MC-321 created 	emplates/neighborhood.html but that file was never committed to clean_build (the file exists locally as untracked). This MC-328 commit ships the template (with my MC-328 additions on top of MC-321's existing content) so the deploy branch is consistent.
+
+_(Updated: 2026-07-08 06:55 UTC)_

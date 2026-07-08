@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Neighbourhood stats — Toronto Rent Deals</title>
+  <!-- MC-328: Chart.js (matches the version used by index.html for the
+       listing-detail price-history chart so behaviour is identical). -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* MC-321: Minimal standalone styles — reuses index.html conventions where
+       possible (age badges, source chips) but is fully self-contained so the
+       page renders without the index bundle. */
+    :root {
+      --bg: #f5f6fa;
+      --fg: #1d2530;
+      --muted: #6c7a89;
+      --accent: #2d6a4f;
+      --accent-soft: #e6f1ec;
+      --warn: #b95c00;
+      --warn-soft: #fff3cd;
+      --bad: #b00020;
+      --good: #2d6a4f;
+      --border: #e0e3e8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.5;
+    }
+    header {
+      background: white;
+      border-bottom: 1px solid var(--border);
+      padding: 18px 24px;
+    }
+    header h1 {
+      margin: 0 0 4px 0;
+      font-size: 1.5rem;
+      color: var(--accent);
+    }
+    header .meta {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    header .meta a {
+      color: var(--accent);
+      text-decoration: none;
+      margin-right: 12px;
+    }
+    header .meta a:hover { text-decoration: underline; }
+
+    main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .stat-card .label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .stat-card .value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--fg);
+    }
+    .stat-card .value.muted { color: var(--muted); font-size: 0.95rem; font-weight: 400; }
+
+    .beds-breakdown {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 24px;
+    }
+    .beds-breakdown h2 {
+      margin: 0 0 10px 0;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+    .bed-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      font-size: 0.9rem;
+    }
+    .bed-bar .label { width: 80px; color: var(--fg); }
+    .bed-bar .track {
+      flex: 1;
+      background: var(--accent-soft);
+      border-radius: 4px;
+      height: 10px;
+      overflow: hidden;
+    }
+    .bed-bar .fill {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.3s ease;
+    }
+    .bed-bar .count { width: 40px; text-align: right; color: var(--muted); }
+
+    /* MC-328: 30-day price trend chart section */
+    .trend-section {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 24px;
+    }
+    .trend-section h2 {
+      margin: 0 0 4px 0;
+      font-size: 1.05rem;
+    }
+    .trend-section .trend-sub {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .trend-sub .trend-pill {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.78rem;
+      margin-left: 6px;
+    }
+    .trend-pill.up    { background: #fde7e7; color: #b00020; }
+    .trend-pill.down  { background: #e6f1ec; color: #2d6a4f; }
+    .trend-pill.flat  { background: #f0f0f0; color: #6c7a89; }
+    .trend-empty {
+      padding: 18px 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      text-align: center;
+    }
+    .trend-loading {
+      padding: 18px 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      text-align: center;
+    }
+    .trend-canvas-wrap {
+      position: relative;
+      height: 220px;
+      width: 100%;
+    }
+    .trend-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 720px) {
+      .trend-grid { grid-template-columns: 1fr; }
+    }
+
+    .deals-section {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .deals-section h2 {
+      margin: 0 0 12px 0;
+      font-size: 1.05rem;
+    }
+    table.deals {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+    }
+    table.deals th, table.deals td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    table.deals th {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.4px;
+    }
+    table.deals tr:last-child td { border-bottom: none; }
+    table.deals .price { font-weight: 700; color: var(--accent); }
+    table.deals .pct-under { font-weight: 700; color: var(--good); }
+    table.deals .age { color: var(--muted); font-size: 0.85rem; }
+
+    .loading, .error {
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .error { color: var(--bad); }
+
+    .source-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      vertical-align: middle;
+    }
+    .source-kijiji {
+      background: #e0f0ff; color: #1e5b94; border: 1px solid #b3d9ff;
+    }
+    .source-cl {
+      background: #fff0e0; color: #8b4513; border: 1px solid #ffc299;
+    }
+
+    footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="page-title">Loading neighbourhood…</h1>
+    <div class="meta">
+      <a href="/">&larr; Back to all deals</a>
+      <a href="/saved-searches" class="meta-nav">🔖 Saved</a>
+      <span id="region-line"></span>
+    </div>
+  </header>
+
+  <main>
+    <div id="loading" class="loading">Fetching stats…</div>
+    <div id="error" class="error" style="display:none;"></div>
+
+    <div id="content" style="display:none;">
+      <section class="stats-grid" id="stats-grid"></section>
+      <section class="beds-breakdown" id="beds-breakdown"></section>
+      <section class="trend-section" id="trend-section">
+        <h2>30-day price trend</h2>
+        <div class="trend-sub" id="trend-sub"></div>
+        <div id="trend-loading" class="trend-loading">Loading trend data…</div>
+        <div id="trend-empty" class="trend-empty" style="display:none;">
+          Not enough data yet — need at least 2 days of price history to draw a trend.
+        </div>
+        <div id="trend-grid" class="trend-grid" style="display:none;">
+          <div>
+            <h3 style="margin:0 0 6px 0;font-size:0.85rem;text-transform:uppercase;color:var(--muted);letter-spacing:0.5px;">Median asking price</h3>
+            <div class="trend-canvas-wrap"><canvas id="nbhd_trend_chart"></canvas></div>
+          </div>
+          <div>
+            <h3 style="margin:0 0 6px 0;font-size:0.85rem;text-transform:uppercase;color:var(--muted);letter-spacing:0.5px;">Median $/sqft</h3>
+            <div class="trend-canvas-wrap"><canvas id="nbhd_pps_trend_chart"></canvas></div>
+          </div>
+        </div>
+      </section>
+      <section class="deals-section">
+        <h2>Top 5 deals in this neighbourhood</h2>
+        <table class="deals">
+          <thead>
+            <tr>
+              <th>Price</th>
+              <th>BD/BA</th>
+              <th>Sqft</th>
+              <th>% Under</th>
+              <th>Score</th>
+              <th>Age</th>
+              <th>Source</th>
+              <th>Link</th>
+            </tr>
+          </thead>
+          <tbody id="top-deals-body"></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    Toronto Rent Deal Finder · MC-321 neighbourhood drill-down
+  </footer>
+
+  <script>
+    // MC-321: Fetch + render the drill-down page client-side.
+    const slug = {{ slug|tojson }};
+
+    function fmtMoney(v) {
+      if (v === null || v === undefined) return '—';
+      return '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    }
+    function fmtMoneyPct(v) {
+      if (v === null || v === undefined) return '—';
+      return '$' + Number(v).toFixed(2);
+    }
+    function escHtml(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function ageStr(days) {
+      if (days === null || days === undefined) return '—';
+      if (days === 0) return 'TODAY';
+      if (days === 1) return '1d ago';
+      if (days <= 7) return days + 'd ago';
+      return days + 'd';
+    }
+    function sourceBadge(src) {
+      if (!src) return '';
+      if (src === 'kijiji') return '<span class="source-badge source-kijiji">KIJIJI</span>';
+      if (src === 'craigslist') return '<span class="source-badge source-cl">CL</span>';
+      return '';
+    }
+
+    async function load() {
+      const loading = document.getElementById('loading');
+      const errorEl = document.getElementById('error');
+      const content = document.getElementById('content');
+
+      let stats;
+      try {
+        const r = await fetch('/api/neighborhoods/' + encodeURIComponent(slug) + '/stats');
+        if (!r.ok) {
+          if (r.status === 404) {
+            throw new Error('No active listings for "' + slug + '". It may have been renamed or is outside Toronto.');
+          }
+          throw new Error('Server error: HTTP ' + r.status);
+        }
+        stats = await r.json();
+      } catch (e) {
+        loading.style.display = 'none';
+        errorEl.textContent = e.message || String(e);
+        errorEl.style.display = 'block';
+        document.getElementById('page-title').textContent = 'Neighbourhood not found';
+        return;
+      }
+
+      // Also fetch the live deal set so we can show the source badge per row.
+      let dealsByListingId = {};
+      try {
+        const dr = await fetch('/api/deals?neighbourhood=' + encodeURIComponent(stats.neighborhood) + '&limit=200');
+        if (dr.ok) {
+          const payload = await dr.json();
+          const rows = Array.isArray(payload) ? payload : (payload.deals || []);
+          rows.forEach(d => { dealsByListingId[d.listing_id] = d; });
+        }
+      } catch (e) {
+        // non-fatal
+        console.warn('Could not enrich with sources:', e);
+      }
+
+      // Title
+      document.getElementById('page-title').textContent = stats.neighborhood;
+      const region = stats.top_deals[0] && dealsByListingId[stats.top_deals[0].listing_id]
+        ? dealsByListingId[stats.top_deals[0].listing_id].region
+        : '';
+      const regionLine = document.getElementById('region-line');
+      if (region) regionLine.textContent = 'Region: ' + region;
+
+      // Stats grid
+      const grid = document.getElementById('stats-grid');
+      const sqftText = stats.median_price_per_sqft !== null
+        ? fmtMoneyPct(stats.median_price_per_sqft) + '/sqft'
+        : '—';
+      const priceRange = (stats.min_price !== null && stats.max_price !== null)
+        ? fmtMoney(stats.min_price) + ' – ' + fmtMoney(stats.max_price)
+        : '—';
+      grid.innerHTML = `
+        <div class="stat-card">
+          <div class="label">Active Listings</div>
+          <div class="value">${stats.count}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Median Price</div>
+          <div class="value">${fmtMoney(stats.median_price)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Median $/sqft</div>
+          <div class="value">${sqftText}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Price Range</div>
+          <div class="value" style="font-size:1.05rem;">${priceRange}</div>
+        </div>
+      `;
+
+      // Beds breakdown
+      const bedsBox = document.getElementById('beds-breakdown');
+      const bedsEntries = Object.entries(stats.beds_breakdown || {});
+      if (bedsEntries.length === 0) {
+        bedsBox.innerHTML = '<h2>Listings by beds</h2><div class="value muted">No beds data</div>';
+      } else {
+        const maxCount = Math.max(...bedsEntries.map(([, n]) => n));
+        const bars = bedsEntries.map(([beds, n]) => {
+          const pct = Math.max(8, Math.round((n / maxCount) * 100));
+          const label = beds === '0' ? 'Studio' : beds + 'BR';
+          return `<div class="bed-bar">
+            <span class="label">${label}</span>
+            <span class="track"><span class="fill" style="width:${pct}%;"></span></span>
+            <span class="count">${n}</span>
+          </div>`;
+        }).join('');
+        bedsBox.innerHTML = '<h2>Listings by beds</h2>' + bars;
+      }
+
+      // MC-328: 30-day price trend chart. Independent fetch so a chart
+      // failure cannot block the rest of the page from rendering.
+      loadTrend(stats.neighborhood);
+
+      // Top deals
+      const tbody = document.getElementById('top-deals-body');
+      if (!stats.top_deals || stats.top_deals.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);">No scored deals in this neighbourhood yet.</td></tr>';
+      } else {
+        tbody.innerHTML = stats.top_deals.map(d => {
+          const live = dealsByListingId[d.listing_id] || {};
+          const src = sourceBadge(live.source || '');
+          const beds = d.beds !== null && d.beds !== undefined ? d.beds : '—';
+          const baths = d.baths !== null && d.baths !== undefined ? d.baths : '—';
+          const sqft = d.sqft && Number(d.sqft) > 0 ? Number(d.sqft).toLocaleString() : '—';
+          const pct = d.pct_under !== null && d.pct_under !== undefined ? Number(d.pct_under).toFixed(1) + '%' : '—';
+          const score = d.final_score !== null && d.final_score !== undefined ? Number(d.final_score).toFixed(2) : '—';
+          const link = d.link || '#';
+          return `<tr>
+            <td class="price">${escHtml(d.price_fmt || fmtMoney(d.price))}</td>
+            <td>${beds} / ${baths}</td>
+            <td>${sqft}</td>
+            <td class="pct-under">${pct}</td>
+            <td>${score}</td>
+            <td class="age">${escHtml(ageStr(d.days_ago))}</td>
+            <td>${src}</td>
+            <td><a href="${escHtml(link)}" target="_blank" rel="noopener">View &rarr;</a></td>
+          </tr>`;
+        }).join('');
+      }
+
+      loading.style.display = 'none';
+      content.style.display = 'block';
+    }
+
+    // MC-328: Fetch + render the 30-day price-trend chart for one
+    // neighbourhood. Independent of the main stats fetch so a 5xx or
+    // 404 here cannot take down the page. The UI degrades gracefully
+    // to "Not enough data yet" if there are <2 days of history.
+    let _nbhdTrendChart = null;
+    let _nbhdPpsTrendChart = null;
+    async function loadTrend(neighborhood) {
+      const loadingEl = document.getElementById('trend-loading');
+      const emptyEl   = document.getElementById('trend-empty');
+      const gridEl    = document.getElementById('trend-grid');
+      const subEl     = document.getElementById('trend-sub');
+      if (!loadingEl || !emptyEl || !gridEl || !subEl) return;
+
+      let payload;
+      try {
+        const r = await fetch('/api/neighborhoods/' + encodeURIComponent(slug) + '/price-history?days=30');
+        if (!r.ok) {
+          // 404 = no active listings for that slug → treat as "not enough
+          // data"; any other status → log + treat the same way.
+          loadingEl.style.display = 'none';
+          emptyEl.style.display = 'block';
+          return;
+        }
+        payload = await r.json();
+      } catch (e) {
+        console.warn('Trend fetch failed:', e);
+        loadingEl.style.display = 'none';
+        emptyEl.style.display = 'block';
+        return;
+      }
+
+      const series = (payload && payload.series) || [];
+      loadingEl.style.display = 'none';
+
+      if (series.length < 2) {
+        emptyEl.style.display = 'block';
+        return;
+      }
+
+      // Sub-header: "N days of data · ↗ +X% over the window" (or ↘ or —).
+      const first = series[0];
+      const last  = series[series.length - 1];
+      const firstP = (first.median_price !== null && first.median_price !== undefined) ? first.median_price : null;
+      const lastP  = (last.median_price  !== null && last.median_price  !== undefined) ? last.median_price  : null;
+      let pillHtml = '';
+      if (firstP !== null && lastP !== null && firstP > 0) {
+        const pct = ((lastP - firstP) / firstP) * 100;
+        if (Math.abs(pct) >= 0.5) {
+          const cls = pct > 0 ? 'up' : 'down';
+          const arrow = pct > 0 ? '↗' : '↘';
+          pillHtml = '<span class="trend-pill ' + cls + '">' + arrow + ' ' + Math.abs(pct).toFixed(1) + '% over window</span>';
+        } else {
+          pillHtml = '<span class="trend-pill flat">— Stable</span>';
+        }
+      } else {
+        pillHtml = '<span class="trend-pill flat">— Stable</span>';
+      }
+      subEl.innerHTML = series.length + ' days of data' + pillHtml;
+
+      const labels = series.map(s => s.date_iso);
+
+      // Median price chart (left)
+      const priceData = series.map(s =>
+        (s.median_price !== null && s.median_price !== undefined) ? s.median_price : null
+      );
+      const priceCtx = document.getElementById('nbhd_trend_chart');
+      if (priceCtx) {
+        if (_nbhdTrendChart) { _nbhdTrendChart.destroy(); _nbhdTrendChart = null; }
+        _nbhdTrendChart = new Chart(priceCtx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Median asking price',
+              data: priceData,
+              borderColor: '#2d6a4f',
+              backgroundColor: 'rgba(45, 106, 79, 0.12)',
+              borderWidth: 2,
+              tension: 0.25,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              spanGaps: true,
+              fill: true,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    const v = ctx.parsed.y;
+                    return v === null || v === undefined ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+                  },
+                },
+              },
+            },
+            scales: {
+              y: {
+                ticks: {
+                  callback: function (v) { return '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }); },
+                },
+                beginAtZero: false,
+              },
+            },
+          },
+        });
+      }
+
+      // Median $/sqft chart (right) — only render if any data point has a value
+      const ppsData = series.map(s =>
+        (s.median_price_per_sqft !== null && s.median_price_per_sqft !== undefined) ? s.median_price_per_sqft : null
+      );
+      const hasPps = ppsData.some(v => v !== null);
+      const ppsCtx = document.getElementById('nbhd_pps_trend_chart');
+      if (hasPps && ppsCtx) {
+        if (_nbhdPpsTrendChart) { _nbhdPpsTrendChart.destroy(); _nbhdPpsTrendChart = null; }
+        _nbhdPpsTrendChart = new Chart(ppsCtx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Median $/sqft',
+              data: ppsData,
+              borderColor: '#1e5b94',
+              backgroundColor: 'rgba(30, 91, 148, 0.10)',
+              borderWidth: 2,
+              tension: 0.25,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              spanGaps: true,
+              fill: true,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    const v = ctx.parsed.y;
+                    return v === null || v === undefined ? '—' : '$' + Number(v).toFixed(2) + '/sqft';
+                  },
+                },
+              },
+            },
+            scales: {
+              y: {
+                ticks: {
+                  callback: function (v) { return '$' + Number(v).toFixed(2); },
+                },
+                beginAtZero: false,
+              },
+            },
+          },
+        });
+      } else {
+        // Hide the right column when no $/sqft data is available — keeps the
+        // grid from showing a blank canvas.
+        const ppsCol = ppsCtx ? ppsCtx.parentElement.parentElement : null;
+        if (ppsCol) ppsCol.style.display = 'none';
+      }
+
+      gridEl.style.display = 'grid';
+    }
+
+    load();
+  </script>
+</body>
+</html>

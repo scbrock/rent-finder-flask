@@ -2034,6 +2034,131 @@ def get_all_listing_price_drops(
     }
 
 
+def get_neighborhood_price_history(
+    neighborhood: str,
+    days: int = 30,
+    now_ts: Optional[str] = None,
+) -> list:
+    """
+    MC-328: Aggregate price history for a single neighbourhood across all
+    active listings in it, bucketed by calendar day (UTC).
+
+    Joins price_history → listings (active only) on listing_id, filters by
+    neighbourhood name (case-insensitive), and returns one row per day with
+    median price + median $/sqft for that day. Days with no listings in
+    the neighbourhood are simply absent from the output (the chart's job
+    to draw a continuous line — empty gaps communicate "no data").
+
+    Returned list is sorted ascending by date and contains dicts:
+        {
+            'date_iso':               'YYYY-MM-DD',
+            'median_price':           float | None,
+            'median_price_per_sqft':  float | None,
+            'listing_count':          int,
+            'dollar_per_sqft_min':    float | None,
+            'dollar_per_sqft_max':    float | None,
+        }
+
+    Notes / caveats:
+    - Listings with NULL sqft are excluded from the $/sqft calculations
+      but are still counted in listing_count and included in the price
+      median (sqft vs no-sqft are different signals).
+    - If the neighbourhood has zero active listings OR zero price_history
+      rows in the window, the returned list is `[]` (not None — the
+      endpoint interprets an empty list as "no chart, show empty state").
+    - The neighbourhood name is matched case-insensitively but stored as
+      given in the listings table (the endpoint resolves to the canonical
+      name first via _slug_to_neighborhood, so this is always the
+      canonical spelling).
+    - `now_ts` is exposed for tests that need deterministic date math.
+    """
+    import datetime as _dt
+    if not neighborhood:
+        return []
+
+    conn = _get_conn()
+    try:
+        if now_ts:
+            now_dt = _dt.datetime.strptime(now_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+        else:
+            now_dt = datetime.now(timezone.utc)
+        cutoff = (now_dt - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Pull (date, price, sqft) for every price_history row of an active
+        # listing in this neighbourhood within the window. We bucket in
+        # Python rather than SQL so the $/sqft median per bucket is easy
+        # to compute without window functions across NULL values.
+        rows = conn.execute("""
+            SELECT ph.seen_at, ph.price, l.sqft
+            FROM price_history ph
+            JOIN listings l ON l.listing_id = ph.listing_id
+            WHERE l.is_active = 1
+              AND l.neighborhood IS NOT NULL
+              AND lower(l.neighborhood) = lower(?)
+              AND ph.seen_at >= ?
+            ORDER BY ph.seen_at ASC
+        """, (neighborhood, cutoff)).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    buckets: dict = {}
+    for seen_at, price, sqft in rows:
+        # ISO date prefix = the bucket key (UTC day)
+        day = (seen_at or '')[:10]
+        if not day or len(day) < 10:
+            continue
+        if day not in buckets:
+            buckets[day] = {'prices': [], 'pps': []}
+        # price can be None/NoneType if seeded with NULL (defensive)
+        if price is None:
+            continue
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            continue
+        if p <= 0:
+            continue
+        buckets[day]['prices'].append(p)
+        # $/sqft: only include rows where sqft is a positive number
+        if sqft is None:
+            continue
+        try:
+            s = float(sqft)
+        except (TypeError, ValueError):
+            continue
+        if s > 0:
+            buckets[day]['pps'].append(p / s)
+
+    out: list = []
+    for day in sorted(buckets.keys()):
+        prices = sorted(buckets[day]['prices'])
+        pps = sorted(buckets[day]['pps'])
+        out.append({
+            'date_iso': day,
+            'median_price': _median_of(prices),
+            'median_price_per_sqft': _median_of(pps) if pps else None,
+            'listing_count': len(prices),
+            'dollar_per_sqft_min': min(pps) if pps else None,
+            'dollar_per_sqft_max': max(pps) if pps else None,
+        })
+    return out
+
+
+def _median_of(values: list) -> Optional[float]:
+    """Local median helper that returns None for empty input. Kept private
+    to this module — app.py has its own _median which returns None too."""
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    if n % 2:
+        return float(s[n // 2])
+    return float((s[n // 2 - 1] + s[n // 2]) / 2)
+
+
 def seed_price_history_for_listing(listing_id: str, price: float, seen_at: str) -> bool:
     """
     MC-325: Insert a single price_history row. Returns True if the row was
