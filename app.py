@@ -1336,6 +1336,25 @@ def api_listing_detail(listing_idx: int):
     return _build_listing_detail_response(deals[listing_idx], listing_idx)
 
 
+@app.route('/api/listing/by-id/<path:listing_id>')
+def api_listing_detail_by_id_path(listing_id: str):
+    """
+    MC-334: Return full detail for a single listing by its listing_id
+    (the URL-based stable key, matches what's used in SQLite listings.listing_id
+    and exposed as d.listing_id on every /api/deals row). The legacy int-indexed
+    /api/listing/<int:listing_idx> route stays for back-compat; this new
+    route is the canonical URL-keyed lookup that the deal modal and share URLs use.
+    """
+    if not listing_id:
+        return jsonify({'error': 'id required'}), 400
+    deals = load_deals()
+    d = next((x for x in deals if x.get('listing_id') == listing_id), None)
+    if d is None:
+        return jsonify({'error': 'Listing not found'}), 404
+    idx = deals.index(d)
+    return _build_listing_detail_response(d, idx)
+
+
 def _build_listing_detail_response(d: dict, idx: int):
     breakdown = {
         'listed_price': d['price'],

@@ -444,6 +444,8 @@ def scrape_kijiji(pages=5) -> pd.DataFrame:
 
                     "link": lst.get("url", ""),
 
+                    "title": lst.get("title", ""),  # MC-334: persist Kijiji listing title
+
                     "image_url": lst.get("image_url", ""),  # MC-307: photo from Kijiji imageUrls[]
 
                     "image_urls": lst.get("image_urls", []) or [],  # MC-312: full gallery list
@@ -507,6 +509,8 @@ def scrape_craigslist(pages: int = 5) -> pd.DataFrame:
                 "is_stale": lst.is_stale,
 
                 "link": lst.url,
+
+                "title": getattr(lst, "title", ""),  # MC-334: persist Craigslist listing title
 
                 "image_url": getattr(lst, "image_url", ""),  # MC-307: Craigslist search has no images
 
