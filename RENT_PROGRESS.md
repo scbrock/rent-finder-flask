@@ -1,6 +1,6 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** MC-332 complete, in review. "Show only with photos" filter on /api/deals + UI toggle. 96/376 active listings now photo-flagged (was unchecked before — CL no-photo rows dominate the table). 42 new tests pass; 331/331 across MC-316/319/320/321/325/327/329/test_app/MC-332 green; 0 regressions in critical suite.
+**Current Phase:** MC-332 complete, in review. MC-333 created (neighbourhood-fallback fix, backlog). Cron-loop self-audit 2026-07-08: live /api/deals returns 247 active deals, ~21.5% carry `neighborhood_slug='toronto'` (generic fallback). /api/meta contains ~25 street-address entries ("5 Mallory Gardens", "Montrose Ave", "DUPONT AND LANSDOWNE") treated as neighbourhood names. Also: all deals return `title=''` (title column absent from deals_output.csv). Healthz 200 OK; app live at https://rent-finder-flask.onrender.com.
 **Last Updated:** 2026-07-08 22:45 UTC
 
 ---

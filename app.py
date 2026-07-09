@@ -6,6 +6,7 @@ MC-267/268/270: POI proximity — grocery, gym, TTC via Overpass + ORS.
 
 import os, sys, json, time, hashlib, math, re
 from flask import Flask, render_template, jsonify, request
+from neighbourhood_lookup import resolve_neighbourhood
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(APP_DIR, 'data')
@@ -305,11 +306,21 @@ def _neighborhoods_summary(deals) -> list:
     Returns a list of dicts: {name, slug, count, median_price}, sorted by
     name (case-insensitive). Neighborhoods with no priced listings are
     omitted (count is still meaningful, median_price=None).
+
+    MC-333: Rows whose neighbourhood_status is 'toronto_catchall' or
+    'low_signal_address' are excluded so the sidebar doesn't surface
+    "Toronto (62)" or raw street addresses like "30 Carabob Court".
     """
     by_name: dict = {}
     for d in deals:
         n = (d.get('neighbourhood') or '').strip()
         if not n:
+            continue
+        # MC-333: Drop low-signal / catch-all rows. We still count them in
+        # the underlying SQLite, but the sidebar (and the api_meta
+        # neighbourhoods list) should only show actionable segments.
+        _status = d.get('neighborhood_status', '')
+        if _status in ('toronto_catchall', 'low_signal_address', 'off_toronto'):
             continue
         if n not in by_name:
             by_name[n] = {'name': n, 'slug': _slugify(n), 'prices': [], 'count': 0}
@@ -469,11 +480,34 @@ def _normalize_row(r: dict) -> dict:
                 single = r.get('image_url', '') or ''
                 image_urls_list = [single] if single else []
 
+        # MC-333: Resolve raw neighbourhood -> (name, status) before building
+        # row_dict so the cleaned-up name flows through to the slug, the
+        # POI lookups (which key on neighbourhood), and the neighbourhood
+        # filter. resolve_neighbourhood() already tries the URL slug + title
+        # fallback so generic 'Toronto' rows whose URL encodes a real
+        # neighbourhood ('toronto-11-yonge-and-bloor-condo') get upgraded
+        # automatically. If neighbourhood_lookup raises (e.g. missing data
+        # file in a test fixture), fall back to the raw value with status
+        # 'fallback_raw' so the row stays visible.
+        try:
+            _resolved_name, _neighborhood_status = resolve_neighbourhood(
+                r.get('neighborhood', ''),
+                r.get('url') or r.get('link', ''),
+                r.get('title', ''),
+            )
+        except Exception:
+            _resolved_name = r.get('neighborhood', '') or ''
+            _neighborhood_status = 'fallback_raw'
+
         row_dict = {
             'listing_id': r.get('listing_id') or r.get('url') or r.get('link', ''),
             'title': r.get('title', ''),
-            'neighbourhood': r.get('neighborhood', ''),
-            'neighborhood_slug': _slugify(r.get('neighborhood', '') or ''),
+            'neighbourhood': _resolved_name,
+            'neighborhood_slug': _slugify(_resolved_name),
+            # MC-333: Status drives the include_fallback filter and is exposed
+            # on every row so tests / downstream consumers can introspect
+            # how the raw input was classified.
+            'neighborhood_status': _neighborhood_status,
             'region': r.get('region', ''),
             # MC-316: Normalize source to lowercase canonical form for filtering.
             # The CSV/DB store 'Kijiji' / 'Craigslist'; emit lowercase so the filter
@@ -758,6 +792,14 @@ def api_deals():
     # false = no filter (all rows returned, regardless of photo presence).
     has_image_raw = (request.args.get('has_image', '') or '').strip().lower()
     has_image = has_image_raw in ('true', '1', 'yes')
+    # MC-333: include_fallback — when False (default), rows whose
+    # neighborhood_status is 'toronto_catchall' or 'low_signal_address'
+    # are hidden from /api/deals so the user sees only properly-resolved
+    # listings. Pass ?include_fallback=true to opt in to the unfiltered
+    # view (useful for debugging or for users who specifically want to
+    # see address-only / generic listings).
+    include_fallback_raw = (request.args.get('include_fallback', '') or '').strip().lower()
+    include_fallback = include_fallback_raw in ('true', '1', 'yes')
 
     # Apply filters
     if beds_min is not None:
@@ -801,6 +843,18 @@ def api_deals():
     # URL exists). Combines cleanly with source/is_new/price_dropped/etc.
     if has_image:
         deals = [d for d in deals if d.get('has_image', False) is True]
+    # MC-333: Default-filter toronto_catchall, low_signal_address, and
+    # off_toronto rows so the user only sees listings that landed in a
+    # specific Toronto segment. Pass ?include_fallback=true to opt back
+    # in to the raw view (handy for QA / debugging or for users who
+    # want to see generic / address-only / non-Toronto listings).
+    if not include_fallback:
+        deals = [
+            d for d in deals
+            if d.get('neighborhood_status') not in (
+                'toronto_catchall', 'low_signal_address', 'off_toronto',
+            )
+        ]
     if max_commute is not None:
         deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))

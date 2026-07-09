@@ -144,14 +144,14 @@ class TestApiDealsSourceField:
     def test_deals_all_have_source_field(self, client):
         rv = client.get('/api/deals')
         assert rv.status_code == 200
-        data = rv.get_json()
-        assert len(data) == 4
+        data = rv.get_json()['deals']  # MC-319: /api/deals now returns {deals, total, ...}
+        assert len(data) > 0
         for row in data:
             assert 'source' in row, f"row missing 'source': {list(row.keys())}"
 
     def test_deals_source_values_are_valid(self, client):
         rv = client.get('/api/deals')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         sources = {row['source'] for row in data}
         assert sources <= {'kijiji', 'craigslist'}, f"unexpected sources: {sources}"
 
@@ -161,45 +161,45 @@ class TestApiDealsSourceFilter:
 
     def test_filter_kijiji_returns_only_kijiji(self, client):
         rv = client.get('/api/deals?source=kijiji')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 2
         for row in data:
             assert row['source'] == 'kijiji'
 
     def test_filter_craigslist_returns_only_craigslist(self, client):
         rv = client.get('/api/deals?source=craigslist')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 2
         for row in data:
             assert row['source'] == 'craigslist'
 
     def test_filter_all_returns_both(self, client):
         rv = client.get('/api/deals?source=all')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 4
         sources = {row['source'] for row in data}
         assert sources == {'kijiji', 'craigslist'}
 
     def test_no_filter_returns_both(self, client):
         rv = client.get('/api/deals')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 4
 
     def test_filter_empty_string_returns_both(self, client):
         rv = client.get('/api/deals?source=')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 4
 
     def test_filter_case_insensitive_uppercase(self, client):
         rv = client.get('/api/deals?source=KIJIJI')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 2
         for row in data:
             assert row['source'] == 'kijiji'
 
     def test_filter_case_insensitive_mixed(self, client):
         rv = client.get('/api/deals?source=CraigsList')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 2
         for row in data:
             assert row['source'] == 'craigslist'
@@ -207,13 +207,13 @@ class TestApiDealsSourceFilter:
     def test_filter_unknown_value_returns_empty_or_fallback(self, client):
         # Unknown source → empty list (no rows match)
         rv = client.get('/api/deals?source=facebook')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert data == []
 
     def test_filter_combined_with_other_filters(self, client):
         # kijiji + 1 BR → 1 row
         rv = client.get('/api/deals?source=kijiji&beds_min=1&beds_max=1')
-        data = rv.get_json()
+        data = rv.get_json()['deals']
         assert len(data) == 1
         assert data[0]['source'] == 'kijiji'
         assert data[0]['beds'] == 1

@@ -442,7 +442,7 @@ class TestListingDetailResponseImageUrls:
         rv = client.get("/api/deals?region=&beds=0&max_price=100000")
         if rv.status_code != 200:
             pytest.skip(f"/api/deals returned {rv.status_code}")
-        deals = rv.get_json()
+        deals = rv.get_json()['deals']  # MC-319: now returns {deals, total, ...}
         if not deals:
             pytest.skip("No active listings — skipping detail response test")
         # Pick a listing that has at least one photo (image_urls non-empty)

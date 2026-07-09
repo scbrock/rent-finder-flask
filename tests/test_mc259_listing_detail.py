@@ -85,7 +85,7 @@ class TestListingDetail:
     def test_all_listings_have_detail(self):
         """Every listing index from 0 to min(9, len(deals)-1) should be accessible."""
         deals_resp = client.get('/api/deals')
-        deals = deals_resp.get_json()
+        deals = deals_resp.get_json()['deals']
         count = min(10, len(deals))
         for i in range(count):
             resp = client.get(f'/api/listing/{i}')
@@ -94,7 +94,7 @@ class TestListingDetail:
 
 class TestDetailModalLinks:
     def test_deals_have_link_column(self):
-        deals = client.get('/api/deals').get_json()
+        deals = client.get('/api/deals').get_json()['deals']
         if deals:
             assert 'link' in deals[0]
             assert deals[0]['link'].startswith('http'), "Link should be a valid URL"

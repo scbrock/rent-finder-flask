@@ -77,7 +77,9 @@ def test_app_renders_without_error(client):
     assert r.status_code == 200
 
 def test_api_deals_returns_200(client):
-    """API works and returns deals list."""
+    """API works and returns the paginated dict with 'deals' list (MC-319)."""
     r = client.get('/api/deals')
     assert r.status_code == 200
-    assert isinstance(r.get_json(), list)
+    data = r.get_json()
+    assert isinstance(data, dict)
+    assert 'deals' in data and isinstance(data['deals'], list)

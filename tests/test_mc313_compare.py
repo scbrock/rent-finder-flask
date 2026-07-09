@@ -24,12 +24,15 @@ client = flask_app.test_client()
 
 
 def _get_deals():
-    """Helper: fetch the current deal list (from SQLite or CSV fallback)."""
+    """Helper: fetch the current deal list (from SQLite or CSV fallback).
+
+    MC-319: /api/deals now returns {deals, total, limit, offset, has_more}; extract the deals list.
+    """
     resp = client.get('/api/deals')
     assert resp.status_code == 200
     data = resp.get_json()
-    assert isinstance(data, list)
-    return data
+    assert isinstance(data, dict) and 'deals' in data
+    return data['deals']  # may be a single page; callers that need all should iterate pagination
 
 
 def test_endpoint_exists_and_returns_200():

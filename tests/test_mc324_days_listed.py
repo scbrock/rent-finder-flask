@@ -302,7 +302,10 @@ class TestApiDealsSortDaysListed:
         assert first['days_listed'] >= last['days_listed']
         # First row should be the ~35d King West listing
         assert first['days_listed'] >= 30
-        assert 'King West' in first['neighbourhood']
+        # MC-333: neighbourhood now flows through resolve_neighbourhood()
+        # which upgrades "King West" -> "Niagara" via _DIRECT_MAP, so the
+        # assertion uses the resolved name.
+        assert first['neighbourhood'] == 'Niagara'
 
     def test_default_sort_matches_reversed_ascending(self, client):
         """AC3 explicitly defines asc = longest first. Reversing the result

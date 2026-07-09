@@ -119,7 +119,7 @@ class TestCommuteWithDeals:
     def test_deals_has_commute_minutes_field(self):
         """Each deal should have a commute_minutes field (or null)."""
         resp = client.get('/api/deals')
-        deals = resp.get_json()
+        deals = resp.get_json()['deals']
         if deals:
             for d in deals[:5]:
                 assert 'commute_minutes' in d
@@ -128,7 +128,7 @@ class TestCommuteWithDeals:
         """max_commute param should be accepted without error."""
         resp = client.get('/api/deals?max_commute=30')
         assert resp.status_code == 200
-        deals = resp.get_json()
+        deals = resp.get_json()['deals']
         # If any deal has commute_minutes set, all returned should be <= 30
         for d in deals:
             if d.get('commute_minutes') is not None:

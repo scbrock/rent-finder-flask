@@ -30,14 +30,14 @@ def test_api_deals_returns_200():
 
 def test_api_deals_returns_list():
     resp = client.get('/api/deals')
-    deals = resp.get_json()
+    deals = resp.get_json()['deals']
     assert isinstance(deals, list)
 
 
 def test_api_deals_returns_min_listings():
     """Pipeline success gate: >= 50 fresh listings required per run (AC1)."""
     resp = client.get('/api/deals')
-    deals = resp.get_json()
+    deals = resp.get_json()['deals']
     assert len(deals) >= 50, f"Expected >= 50 listings, got {len(deals)}"
 
 
@@ -48,21 +48,21 @@ def test_csv_exists():
 
 def test_filter_by_min_beds():
     resp = client.get('/api/deals?beds_min=1')
-    deals = resp.get_json()
+    deals = resp.get_json()['deals']
     for d in deals:
         assert d.get('beds', 0) >= 1
 
 
 def test_filter_by_max_price():
     resp = client.get('/api/deals?max_price=2000')
-    deals = resp.get_json()
+    deals = resp.get_json()['deals']
     # Should return filtered deals (top 50 only for price filter)
     assert len(deals) <= 55
 
 
 def test_filter_by_neighbourhood():
     resp = client.get('/api/deals?neighbourhood=Queen')
-    deals = resp.get_json()
+    deals = resp.get_json()['deals']
     for d in deals:
         assert 'queen' in d.get('neighbourhood', '').lower()
 
@@ -71,5 +71,5 @@ def test_sort_options():
     for sort_opt in ['score', 'pct', 'price']:
         resp = client.get(f'/api/deals?sort={sort_opt}')
         assert resp.status_code == 200
-        deals = resp.get_json()
+        deals = resp.get_json()['deals']
         assert isinstance(deals, list)

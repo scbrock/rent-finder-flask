@@ -1,4 +1,4 @@
-/* MC-313: Side-by-side deal comparison.
+/* MC-313 + MC-314: Side-by-side deal comparison + shareable compare URL.
  *
  * Public API (also exposed via window.__compare and module.exports for Node tests):
  *   addToCompare(listingId)           — toggle-on (add + persist)
@@ -8,9 +8,16 @@
  *   getSelected()                     — returns string[] of listing_ids in selection order
  *   isSelected(listingId)             — boolean
  *   updateCompareBadge()              — refresh the "Compare N" button label/visibility
+ *   updateClearAllButton()            — MC-314: refresh the filter-bar Clear All button visibility
  *   openCompareModal()                — fetch /api/compare + render modal
  *   closeCompareModal()               — hide modal
  *   renderCompareRows(payload)        — pure render fn for testability
+ *   parseURLSelection(searchString)   — MC-314: parse ?cmp=<ids> query param
+ *   encodeSelection(ids)              — MC-314: encode ids for ?cmp= URL param
+ *   buildShareURL()                   — MC-314: build full shareable URL
+ *   restoreFromURL(searchString)      — MC-314: hydrate state from URL (precedence: URL > localStorage)
+ *   clearURLParam()                   — MC-314: strip ?cmp= from URL (history.replaceState)
+ *   copyShareLink()                   — MC-314: copy share URL to clipboard (with fallback)
  *
  * State persistence: localStorage key 'rf_selected_ids' (JSON array, ordered).
  * Limit: 3 ids enforced at add-time; older selections kept if user clears one slot.
@@ -96,6 +103,190 @@
   function clearCompare() {
     state.selected = [];
     resetStorage();
+    updateClearAllButton();
+  }
+
+  // ---- URL encode/decode (MC-314) -----------------------------------------
+
+  // URLSearchParams parsing: returns string[] of valid ids of length 2..MAX_SELECTED, or [].
+  // `cap` defaults to MAX_SELECTED — pass Infinity to disable (used by parseURLSelection to
+  // detect over-long URLs so we can silently fall back instead of truncating).
+  function parseSelectionString(s, cap) {
+    var limit = (cap === undefined) ? MAX_SELECTED : cap;
+    if (typeof s !== 'string' || !s) return [];
+    var raw = s.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+    // Filter: only non-empty string entries (defensive)
+    var clean = raw.filter(function (x) { return typeof x === 'string' && x.length > 0; });
+    // Dedupe while preserving order
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < clean.length; i++) {
+      if (!seen[clean[i]]) {
+        seen[clean[i]] = true;
+        out.push(clean[i]);
+      }
+    }
+    if (limit === Infinity || limit < 0) return out;
+    return out.slice(0, limit);
+  }
+
+  function encodeSelection(ids) {
+    if (!Array.isArray(ids)) return '';
+    var clean = ids.filter(function (x) { return typeof x === 'string' && x.length > 0; });
+    return clean.join(',');
+  }
+
+  // Parses window.location.search string. Returns array of 2..MAX_SELECTED ids
+  // if valid, otherwise returns null (lets caller distinguish "absent" from "invalid").
+  // Accepts optional second argument to bypass window lookup (testable in Node).
+  //
+  // Returns:
+  //   null  - no `cmp` param at all (silent fallback to localStorage is correct)
+  //   []    - `cmp` is present but invalid count (<2 or >MAX_SELECTED) (silent fallback)
+  //   [...] - valid selection (length 2..MAX_SELECTED)
+  function parseURLSelection(searchString) {
+    var source = (searchString === undefined || searchString === null)
+      ? ((typeof window !== 'undefined' && window.location && window.location.search) || '')
+      : searchString;
+    if (!source) return null;
+    var qs = source;
+    if (qs.charAt(0) === '?') qs = qs.slice(1);
+    try {
+      var params = new URLSearchParams(qs);
+      if (!params.has('cmp')) return null;
+      var raw = params.get('cmp');
+      var ids = parseSelectionString(raw, Infinity);
+      // Strict: must be in [2, MAX_SELECTED]. Truncating silently would let
+      // users accidentally share a 4-id link and unknowingly compare the wrong 3.
+      if (ids.length < 2 || ids.length > MAX_SELECTED) {
+        return [];
+      }
+      return ids;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Returns true iff URL had a valid (2..MAX_SELECTED) cmp param.
+  function restoreFromURL(searchString) {
+    var ids = parseURLSelection(searchString);
+    if (ids && ids.length >= 2 && ids.length <= MAX_SELECTED) {
+      state.selected = ids.slice(0, MAX_SELECTED);
+      saveToStorage();  // mirror URL selection into localStorage for next page load
+      return true;
+    }
+    return false;
+  }
+
+  // Strip ?cmp= from the address bar via history.replaceState.
+  function clearURLParam() {
+    try {
+      if (typeof window === 'undefined' || !window.history || !window.history.replaceState) return false;
+      var url = window.location.href;
+      var split = url.split('?');
+      if (split.length < 2) return false;
+      var base = split[0];
+      var qs = split.slice(1).join('?');
+      var params = new URLSearchParams(qs);
+      if (!params.has('cmp')) return false;  // nothing to clear
+      params.delete('cmp');
+      var newQs = params.toString();
+      var newUrl = newQs ? (base + '?' + newQs) : base;
+      window.history.replaceState({}, '', newUrl);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function buildShareURL() {
+    var ids = getSelected();
+    var url = '';
+    if (typeof window !== 'undefined' && window.location) {
+      url = window.location.origin + window.location.pathname;
+    }
+    if (ids.length > 0) {
+      url += '?cmp=' + encodeURIComponent(encodeSelection(ids));
+    }
+    return url;
+  }
+
+  // ---- Copy share link (MC-314) -------------------------------------------
+
+  // Tries clipboard API, then execCommand fallback, then prompt fallback.
+  // Returns: 'ok' (clipboard), 'exec' (fallback select+execCommand succeeded),
+  // 'prompt' (last-resort window.prompt shown), 'noop' (no api at all).
+  function copyShareLink() {
+    var url = buildShareURL();
+    if (!url) return 'noop';
+    // Modern Clipboard API
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        navigator.clipboard.writeText(url).then(function () {
+          flashCopyButton('ok');
+        }).catch(function () {
+          var r = fallbackCopy(url);
+          flashCopyButton(r);
+        });
+        return 'ok';
+      } catch (e) {
+        // fallthrough
+      }
+    }
+    return fallbackCopy(url);
+  }
+
+  function fallbackCopy(url) {
+    try {
+      if (typeof document === 'undefined') return 'noop';
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.value = url;
+      // Position off-screen so the user doesn't see flash
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      input.style.top = '0';
+      input.setAttribute('readonly', '');
+      input.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(input);
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, url.length);
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(input);
+      if (ok) {
+        flashCopyButton('exec');
+        return 'exec';
+      }
+    } catch (e) {
+      // fallthrough to prompt
+    }
+    // Last resort: window.prompt so the user can copy manually
+    try {
+      if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+        window.prompt('Copy this compare URL:', url);
+        flashCopyButton('prompt');
+        return 'prompt';
+      }
+    } catch (e) {}
+    return 'noop';
+  }
+
+  // Reads/writes the share button label. Default label is "Copy Link".
+  function flashCopyButton(kind) {
+    var btn = document.getElementById('cmp_share_btn');
+    if (!btn) return;
+    if (!btn.dataset.origText) {
+      btn.dataset.origText = btn.textContent || 'Copy Link';
+    }
+    var label = '✓ Copied!';
+    if (kind === 'prompt') label = 'Copy URL below';
+    if (kind === 'noop') label = 'Copy failed';
+    btn.textContent = label;
+    setTimeout(function () {
+      btn.textContent = btn.dataset.origText || 'Copy Link';
+    }, 1800);
   }
 
   // ---- UI updates ----------------------------------------------------------
@@ -111,6 +302,22 @@
       btn.style.display = '';
     }
     if (lbl) lbl.textContent = 'Compare ' + n;
+    updateClearAllButton();
+  }
+
+  // MC-314: show the filter-bar "Clear All Selected" button when 1+ selected.
+  // (Compare button shows only with 2+, but Clear All is useful even with 1.)
+  function updateClearAllButton() {
+    var btn = document.getElementById('clear_all_btn');
+    if (!btn) return;
+    var n = state.selected.length;
+    if (n >= 1) {
+      btn.style.display = '';
+    } else {
+      btn.style.display = 'none';
+    }
+    var lbl = document.getElementById('clear_all_btn_label');
+    if (lbl) lbl.textContent = 'Clear All (' + n + ')';
   }
 
   function syncRowCheckboxes() {
@@ -395,7 +602,22 @@
 
   function init() {
     state.selected = loadFromStorage();
+    // MC-314: URL takes precedence over localStorage. If URL has 2..MAX_SELECTED
+    // valid ids, override localStorage and clean the URL so subsequent updates
+    // don't keep reverting. If URL has invalid form, silently fall back.
+    var urlSearch = (typeof window !== 'undefined' && window.location && window.location.search) || '';
+    var fromURL = restoreFromURL(urlSearch);
+    if (fromURL) {
+      clearURLParam();
+    }
     updateCompareBadge();
+    // Auto-open modal when state has 2..MAX_SELECTED ids (typical on URL restore).
+    if (state.selected.length >= 2) {
+      // Defer so any DOM build completes first; safe to delay slightly.
+      setTimeout(function () {
+        try { openCompareModal(); } catch (e) { /* silent */ }
+      }, 0);
+    }
   }
 
   // Expose ------------------------------------------------------------------
@@ -411,6 +633,7 @@
     getSelected: getSelected,
     isSelected: isSelected,
     updateCompareBadge: updateCompareBadge,
+    updateClearAllButton: updateClearAllButton,
     syncRowCheckboxes: syncRowCheckboxes,
     openCompareModal: openCompareModal,
     closeCompareModal: closeCompareModal,
@@ -422,6 +645,16 @@
     fmtMoney: fmtMoney,
     fmtPct: fmtPct,
     fmtNum: fmtNum,
+    // MC-314:
+    parseSelectionString: parseSelectionString,
+    encodeSelection: encodeSelection,
+    parseURLSelection: parseURLSelection,
+    restoreFromURL: restoreFromURL,
+    clearURLParam: clearURLParam,
+    buildShareURL: buildShareURL,
+    copyShareLink: copyShareLink,
+    fallbackCopy: fallbackCopy,
+    flashCopyButton: flashCopyButton,
     getState: function () { return { selected: state.selected.slice(), lastPayload: state.lastPayload }; },
     setState: function (s) {  // test-only helper
       if (s && Array.isArray(s.selected)) state.selected = s.selected.slice();
