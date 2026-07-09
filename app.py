@@ -745,6 +745,145 @@ def healthz():
     return 'ok', 200
 
 
+def _parse_iso_utc(ts: str) -> datetime:
+    """Parse a SQLite scrape_runs.run_ts string into a tz-aware UTC datetime.
+
+    Handles the two formats we emit in this codebase:
+      - '%Y-%m-%dT%H:%M:%SZ'           (e.g. '2026-07-09T14:30:00Z')
+      - '%Y-%m-%dT%H:%M:%S.%fZ'        (e.g. '2026-07-09T14:30:00.123Z')
+    Returns datetime.max (far future) if ts is empty/malformed so the row
+    drops out of "most recent" calculations instead of being treated as "now".
+    """
+    if not ts or not isinstance(ts, str):
+        return datetime.max.replace(tzinfo=timezone.utc)
+    s = ts.strip()
+    for fmt in ('%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ'):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _classify_freshness(minutes_since: float) -> str:
+    """Color-coded freshness bucket. Mirrors the AC's thresholds."""
+    if minutes_since is None or minutes_since < 0:
+        return 'unknown'
+    if minutes_since < 90:
+        return 'fresh'        # green
+    if minutes_since <= 180:
+        return 'aging'        # yellow
+    return 'stale'           # red
+
+
+def _compute_health_snapshot() -> dict:
+    """MC-335: Data-freshness snapshot for the header pill.
+
+    Returns a dict describing when the data was last scraped, how many active
+    listings + deals are present, and a freshness classification. Designed to
+    be cheap (one SQLite connection, two read-only queries) so it's safe to
+    poll from the browser every 60s.
+    """
+    snapshot = {
+        'last_scrape_ts': None,
+        'last_scrape_per_source': {'kijiji': None, 'craigslist': None},
+        'minutes_since_scrape': None,
+        'status': 'unknown',           # 'fresh' | 'aging' | 'stale' | 'unknown'
+        'active_listings': 0,
+        'active_per_source': {'kijiji': 0, 'craigslist': 0},
+        'deal_count': 0,
+        'deal_rate_pct': 0.0,
+        'has_data': False,
+    }
+
+    # Defensive — if the DB doesn't exist yet (cold boot), return zeros
+    if not os.path.exists(DB_PATH):
+        return snapshot
+
+    try:
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(DB_PATH)
+        conn.row_factory = _sqlite3.Row
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Per-source last scrape_ts (most recent run per source)
+            scrape_rows = conn.execute(
+                "SELECT source, run_ts FROM scrape_runs "
+                "WHERE source IN ('kijiji', 'craigslist') "
+                "ORDER BY run_ts DESC"
+            ).fetchall()
+            last_per_src: dict[str, str] = {}
+            for row in scrape_rows:
+                src = (row['source'] or '').lower()
+                if src not in last_per_src and src in ('kijiji', 'craigslist'):
+                    last_per_src[src] = row['run_ts']
+            snapshot['last_scrape_per_source'] = {
+                'kijiji': last_per_src.get('kijiji'),
+                'craigslist': last_per_src.get('craigslist'),
+            }
+            # Overall last_scrape_ts = max of all run_ts values (any source)
+            all_run_ts = [row['run_ts'] for row in scrape_rows if row['run_ts']]
+            if all_run_ts:
+                most_recent = max(all_run_ts, key=_parse_iso_utc)
+                snapshot['last_scrape_ts'] = most_recent
+                try:
+                    last_dt = _parse_iso_utc(most_recent)
+                    if last_dt != datetime.max.replace(tzinfo=timezone.utc):
+                        delta = now - last_dt
+                        snapshot['minutes_since_scrape'] = round(
+                            max(0.0, delta.total_seconds() / 60.0), 1)
+                except Exception:
+                    snapshot['minutes_since_scrape'] = None
+
+            # Active listing count (overall + per source)
+            cnt_row = conn.execute(
+                "SELECT source, COUNT(*) AS n FROM listings "
+                "WHERE is_active = 1 GROUP BY source"
+            ).fetchall()
+            per_src_count = {'kijiji': 0, 'craigslist': 0}
+            total_active = 0
+            for row in cnt_row:
+                src = (row['source'] or '').lower()
+                n = int(row['n'] or 0)
+                total_active += n
+                if src in per_src_count:
+                    per_src_count[src] = n
+            snapshot['active_listings'] = total_active
+            snapshot['active_per_source'] = per_src_count
+
+            # Deal count: rows with score > 0 (i.e. actually under market)
+            deal_row = conn.execute(
+                "SELECT "
+                "  COUNT(*) AS total, "
+                "  SUM(CASE WHEN COALESCE(score, 0) > 0 "
+                "            THEN 1 ELSE 0 END) AS deals "
+                "FROM listings WHERE is_active = 1"
+            ).fetchone()
+            total = int(deal_row['total'] or 0) if deal_row else 0
+            deals = int(deal_row['deals'] or 0) if deal_row else 0
+            snapshot['deal_count'] = deals
+            snapshot['deal_rate_pct'] = round(
+                (deals / total * 100.0) if total > 0 else 0.0, 1)
+
+            snapshot['has_data'] = total > 0
+            snapshot['status'] = _classify_freshness(snapshot['minutes_since_scrape'])
+        finally:
+            conn.close()
+    except Exception:
+        # Leave snapshot at zeroed default — the pill will show "no data"
+        # rather than 500'ing the page.
+        pass
+
+    return snapshot
+
+
+@app.route('/api/health')
+def api_health():
+    """MC-335: live data-freshness snapshot for the header pill."""
+    return jsonify(_compute_health_snapshot())
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
