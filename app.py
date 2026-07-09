@@ -798,7 +798,13 @@ def _compute_health_snapshot() -> dict:
 
     # Defensive — if the DB doesn't exist yet (cold boot), return zeros
     if not os.path.exists(DB_PATH):
-        return snapshot
+        # MC-336: Even when SQLite is missing/empty on Render (gitignored,
+        # ephemeral, cold-boot wiped), the deployed deals_output.csv IS
+        # shipped to Render via git (see .gitignore — CSV is NOT ignored).
+        # The /api/deals endpoint already falls back to CSV via load_deals();
+        # we mirror that here so the health pill shows fresh data instead of
+        # a permanent 'unknown' state.
+        return _compute_health_snapshot_from_csv(snapshot)
 
     try:
         import sqlite3 as _sqlite3
@@ -868,6 +874,12 @@ def _compute_health_snapshot() -> dict:
 
             snapshot['has_data'] = total > 0
             snapshot['status'] = _classify_freshness(snapshot['minutes_since_scrape'])
+
+            # MC-336: SQLite is alive but empty (post-cold-boot, pre-pipeline)
+            # — fall through to the CSV fallback so the pill still surfaces
+            # the deployed dataset's freshness (file mtime as last_scrape_ts).
+            if total == 0:
+                snapshot = _compute_health_snapshot_from_csv(snapshot)
         finally:
             conn.close()
     except Exception:
@@ -875,6 +887,98 @@ def _compute_health_snapshot() -> dict:
         # rather than 500'ing the page.
         pass
 
+    return snapshot
+
+
+def _compute_health_snapshot_from_csv(snapshot: dict) -> dict:
+    """MC-336: Fall back to deals_output.csv when SQLite is empty/missing.
+
+    The repo's .gitignore ensures deals_output.csv IS shipped to Render on
+    every deploy (the DB is gitignored + ephemeral + wiped on cold boot).
+    /api/deals already falls back to CSV via load_deals(); this mirrors the
+    pattern so the health pill reflects real freshness on every Render
+    boot, not just when the local pipeline happens to have synced.
+
+    Read-only: never touches SQLite or disk. Mutates `snapshot` in place and
+    returns it. Uses the CSV file's mtime as `last_scrape_ts` (matches the
+    convention that the most recent pipeline output IS the freshest signal
+    we have when SQLite isn't available).
+
+    Defensive: if the caller passes a partial/empty dict, we initialise the
+    contract keys to zero/None BEFORE deciding whether to read the CSV.
+    This lets unit tests pass `{}` to exercise the missing-CSV path without
+    KeyError.
+    """
+    # Initialise contract keys if caller passed a partial snapshot
+    defaults = {
+        'last_scrape_ts': None,
+        'last_scrape_per_source': {'kijiji': None, 'craigslist': None},
+        'minutes_since_scrape': None,
+        'status': 'unknown',
+        'active_listings': 0,
+        'active_per_source': {'kijiji': 0, 'craigslist': 0},
+        'deal_count': 0,
+        'deal_rate_pct': 0.0,
+        'has_data': False,
+    }
+    for k, v in defaults.items():
+        snapshot.setdefault(k, v)
+
+    try:
+        import csv as _csv
+        if not os.path.exists(DEALS_CSV):
+            return snapshot
+
+        mtime = os.path.getmtime(DEALS_CSV)
+        last_ts = (
+            datetime.fromtimestamp(mtime, tz=timezone.utc)
+            .strftime('%Y-%m-%dT%H:%M:%SZ')
+        )
+        snapshot['last_scrape_ts'] = last_ts
+        # Best-effort: same mtime for both sources since we can't distinguish
+        # per-source timestamps from a merged CSV.
+        snapshot['last_scrape_per_source'] = {
+            'kijiji': last_ts,
+            'craigslist': last_ts,
+        }
+        try:
+            now = datetime.now(timezone.utc)
+            delta_min = (now - datetime.fromtimestamp(mtime, tz=timezone.utc)).total_seconds() / 60.0
+            snapshot['minutes_since_scrape'] = round(max(0.0, delta_min), 1)
+        except Exception:
+            snapshot['minutes_since_scrape'] = None
+
+        per_src = {'kijiji': 0, 'craigslist': 0}
+        total = 0
+        deals = 0
+        with open(DEALS_CSV, newline='', encoding='utf-8') as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                # Skip rows missing the minimum schema; they wouldn't be
+                # useful to the UI anyway.
+                src_raw = (row.get('source') or '').strip().lower()
+                if src_raw not in per_src:
+                    continue
+                per_src[src_raw] += 1
+                total += 1
+                try:
+                    pct = float(row.get('pct_under') or row.get('pct_under_market') or 0)
+                except (TypeError, ValueError):
+                    pct = 0.0
+                if pct > 0:
+                    deals += 1
+
+        snapshot['active_listings'] = total
+        snapshot['active_per_source'] = per_src
+        snapshot['deal_count'] = deals
+        snapshot['deal_rate_pct'] = round(
+            (deals / total * 100.0) if total > 0 else 0.0, 1)
+        snapshot['has_data'] = total > 0
+        snapshot['status'] = _classify_freshness(snapshot['minutes_since_scrape'])
+    except Exception:
+        # Defensive: never let the health endpoint 500. The pill just shows
+        # the previous (zeroed) snapshot if CSV reading explodes.
+        pass
     return snapshot
 
 

@@ -70,9 +70,15 @@ def _seed_listings(db_path: str, rows: list[dict]) -> None:
 
 @pytest.fixture
 def sqlite_db(monkeypatch, tmp_path):
-    """Point app_module.DB_PATH at a fresh temp DB and init the schema."""
+    """Point app_module.DB_PATH at a fresh temp DB and init the schema.
+
+    Also points DEALS_CSV at a non-existent path so the MC-336 CSV fallback
+    (added in MC-336) doesn't accidentally read the real deals_output.csv
+    and mask the "empty SQLite → unknown" assertion.
+    """
     db = str(tmp_path / "test_listings.db")
     monkeypatch.setattr(app_module, "DB_PATH", db)
+    monkeypatch.setattr(app_module, "DEALS_CSV", str(tmp_path / "no-csv.csv"))
     # Also clear any cached persist module DB path so init_db() uses ours
     try:
         import persist
@@ -176,9 +182,15 @@ class TestComputeHealthSnapshot:
         assert snap["active_per_source"] == {"kijiji": 0, "craigslist": 0}
 
     def test_missing_db_file_returns_zeros(self, monkeypatch, tmp_path):
-        """If the DB doesn't exist (cold boot), return the zero shape (not 500)."""
+        """If the DB doesn't exist (cold boot), return the zero shape (not 500).
+
+        Also stub DEALS_CSV so the MC-336 CSV fallback doesn't accidentally
+        read the real deals_output.csv and report has_data=True.
+        """
         monkeypatch.setattr(app_module, "DB_PATH",
                             str(tmp_path / "no-such-db.sqlite"))
+        monkeypatch.setattr(app_module, "DEALS_CSV",
+                            str(tmp_path / "no-such-csv.csv"))
         snap = app_module._compute_health_snapshot()
         assert snap["has_data"] is False
         assert snap["active_listings"] == 0
