@@ -1,7 +1,7 @@
 """
-Toronto Rent Deal Finder — Flask Web App
+Toronto Rent Deal Finder - Flask Web App
 MC-262: Serves deals from SQLite (listings.db) with browsable, filterable UI.
-MC-267/268/270: POI proximity — grocery, gym, TTC via Overpass + ORS.
+MC-267/268/270: POI proximity - grocery, gym, TTC via Overpass + ORS.
 """
 
 import os, sys, json, time, hashlib, math, re
@@ -26,7 +26,7 @@ except Exception:
 
 def _days_ago_str(days_ago: int) -> str:
     if days_ago is None:
-        return '—'
+        return '-'
     if days_ago == 0:
         return 'TODAY'
     if days_ago == 1:
@@ -68,7 +68,7 @@ def _days_ago_class(days_ago: int) -> str:
 # Why a separate column: days_listed reflects how long the listing has been
 # competing for attention in our database. A listing posted 60 days ago but
 # only rediscovered by our scraper last week will have a low days_ago but
-# a high days_listed — useful for users who care about how long the unit has
+# a high days_listed - useful for users who care about how long the unit has
 # actually been available, and a stronger signal for "potentially negotiable".
 from datetime import datetime, timezone
 
@@ -84,14 +84,14 @@ def _days_listed_from_first_seen(first_seen_raw, now_utc=None):
         if ts.endswith('Z'):
             ts = ts[:-1] + '+00:00'
         elif '+' not in ts and '-' not in ts[10:]:
-            # Naive timestamp — treat as UTC (consistent with persist.py storage)
+            # Naive timestamp - treat as UTC (consistent with persist.py storage)
             ts = ts + '+00:00'
         first_seen_dt = datetime.fromisoformat(ts)
         now = now_utc or datetime.now(timezone.utc)
         if first_seen_dt.tzinfo is None:
             first_seen_dt = first_seen_dt.replace(tzinfo=timezone.utc)
         delta_days = (now - first_seen_dt).days
-        # floor at 0 — a delta of -1 from a clock-skewed source means "today"
+        # floor at 0 - a delta of -1 from a clock-skewed source means "today"
         return max(0, delta_days)
     except (ValueError, TypeError):
         return None
@@ -164,6 +164,58 @@ def _median(values):
     return (s[n // 2 - 1] + s[n // 2]) / 2
 
 
+def _median_price(deals):
+    """MC-337: Median asking price across active listings, rounded to nearest $50.
+
+    Returns an int rounded to the nearest $50 so the UI displays clean numbers
+    ("$2,300" instead of "$2,347"). Returns 0 on empty input so callers don't
+    need to special-case None -- the UI maps 0 to a "-" placeholder via
+    price_fmt. Missing/non-numeric prices are skipped.
+
+    Rationale for $50 rounding:
+    - Listings are posted at arbitrary prices ($2,348 has no meaning)
+    - Brain scans "$2,300" faster than "$2,347"
+    - 50 keeps the figure readable while preserving signal
+    """
+    prices = []
+    for d in deals:
+        p = _safe_float(d.get('price'))
+        if p is not None and p > 0:
+            prices.append(p)
+    if not prices:
+        return 0
+    med = _median(prices)
+    if med is None:
+        return 0
+    # Round to nearest $50 for readability (never below the actual median).
+    return int(round(float(med) / 50.0)) * 50
+
+
+def _total_savings(deals):
+    """MC-337: Sum of (fair_value - price) across deals where the listing is under market.
+
+    "Under market" means pct_under > 0 (i.e. positive pct_under). Rows where
+    fair_value is missing/<=price (e.g. catch-all neighbourhood without a
+    benchmark, or fair_value=0) are excluded so the savings figure isn't
+    inflated by junk. Returns 0 on empty input so the UI can show "-".
+
+    Savings dollars represent the monthly cost difference; the yearly figure
+    ($savings * 12) is computed in the JS layer for the "Total Monthly
+    Savings / Yr" tooltip.
+    """
+    total = 0.0
+    for d in deals:
+        pct = _safe_float(d.get('pct_under'))
+        if pct is None or pct <= 0:
+            continue
+        fv = _safe_float(d.get('fair_value'))
+        price = _safe_float(d.get('price'))
+        if fv is None or price is None or fv <= price:
+            continue
+        total += (fv - price)
+    return int(round(total))
+
+
 def _compute_price_per_sqft(price, sqft):
     """MC-327: Compute $/sqft for a listing.
 
@@ -198,7 +250,7 @@ def _price_per_sqft_str(pps):
     """Format $/sqft value for the UI.
 
     Empty/None -> em-dash placeholder ('\u2014') so the cell renders as a
-    graceful '—' instead of an empty box. Otherwise format with commas +
+    graceful '-' instead of an empty box. Otherwise format with commas +
     2 decimals when fractional, 0 decimals when whole-dollar (e.g. '$4' not
     '$4.00', matching how apartment listings tend to be cited).
     """
@@ -216,7 +268,7 @@ def _price_per_sqft_class(pps):
         'pps-cheap'    if pps <= 3.0
         'pps-fair'     if pps <= 4.5
         'pps-expensive' otherwise
-    None for missing data (caller renders as '—' with no chip).
+    None for missing data (caller renders as '-' with no chip).
     """
     if pps is None:
         return ''
@@ -385,14 +437,14 @@ def _compute_cautions(d: dict) -> list[str]:
     cautions = []
     pct_under = d.get('pct_under', 0)
 
-    # Room rental detection — must run before price cautions to avoid false positives
+    # Room rental detection - must run before price cautions to avoid false positives
     if _is_room_rental(d):
-        cautions.append('Possible room rental — confirm it\'s a full unit')
+        cautions.append('Possible room rental - confirm it\'s a full unit')
 
     if pct_under is not None and pct_under > 20:
-        cautions.append('Unusually cheap — verify condition')
+        cautions.append('Unusually cheap - verify condition')
     if pct_under is not None and pct_under > 40:
-        cautions.append('Extremely cheap — likely room rental, scam, or data error')
+        cautions.append('Extremely cheap - likely room rental, scam, or data error')
     days_ago = d.get('days_ago')
     if days_ago is not None and days_ago > 30:
         cautions.append('Listing may be stale')
@@ -456,7 +508,7 @@ def _normalize_row(r: dict) -> dict:
         #   3. None / missing (fallback to single image_url)
         raw_urls = r.get('image_urls')
         if isinstance(raw_urls, str):
-            # Raw string — try JSON decode
+            # Raw string - try JSON decode
             import json as _json
             try:
                 decoded = _json.loads(raw_urls)
@@ -517,13 +569,19 @@ def _normalize_row(r: dict) -> dict:
             'baths': baths,
             'price': price,
             'price_fmt': f"${price:,.0f}",
-            'fair_value_fmt': f"${fair_value:,.0f}" if fair_value else '—',
+            'fair_value_fmt': f"${fair_value:,.0f}" if fair_value else '-',
+            # MC-337: Plain numeric fair_value on every row. Required by both
+            # the JS-computed Total Monthly Savings stat card (filters to
+            # under-market deals and sums fair_value - price) and the backend
+            # helper _total_savings(). Without this field, totals always show
+            # $0 even though fair_value_fmt is populated.
+            'fair_value': round(fair_value, 2) if fair_value else 0,
             'pct_under': round(pct_under, 1),
             'pct_under_fmt': f"{pct_under:.1f}%",
             'days_ago': days_ago,
             'days_ago_str': _days_ago_str(days_ago),
             'days_ago_class': _days_ago_class(days_ago),
-            # MC-324: days_listed — computed from first_seen (durable, SQLite-backed).
+            # MC-324: days_listed - computed from first_seen (durable, SQLite-backed).
             # Fall back to days_ago when first_seen isn't available (CSV path),
             # so the field is always populated for active listings.
             'days_listed': _days_listed_from_first_seen(r.get('first_seen'))
@@ -531,7 +589,7 @@ def _normalize_row(r: dict) -> dict:
             'is_stale': is_stale,
             'is_new': is_new,
             'sqft': r.get('sqft', ''),
-            # MC-327: price per square foot — universal rental value metric.
+            # MC-327: price per square foot - universal rental value metric.
             # Populated only when both price > 0 and sqft > 0; null otherwise.
             # The str/class helpers cover empty-cell formatting + color coding
             # for the UI's Sqft Price column.
@@ -609,7 +667,7 @@ def _normalize_row(r: dict) -> dict:
         # the values are visible to _compute_cautions / sort handlers / UI).
         row_dict['days_listed_str'] = _days_listed_str(row_dict.get('days_listed'))
         row_dict['days_listed_class'] = _days_listed_class(row_dict.get('days_listed'))
-        # MC-332: has_image boolean — True iff this row has at least one usable
+        # MC-332: has_image boolean - True iff this row has at least one usable
         # photo URL (image_url non-empty OR image_urls list has any http URL).
         # Drives the "With photos only" filter and the With photos count in
         # /api/meta. Empty strings, None, and non-http URLs are all rejected so
@@ -796,11 +854,11 @@ def _compute_health_snapshot() -> dict:
         'has_data': False,
     }
 
-    # Defensive — if the DB doesn't exist yet (cold boot), return zeros
+    # Defensive - if the DB doesn't exist yet (cold boot), return zeros
     if not os.path.exists(DB_PATH):
         # MC-336: Even when SQLite is missing/empty on Render (gitignored,
         # ephemeral, cold-boot wiped), the deployed deals_output.csv IS
-        # shipped to Render via git (see .gitignore — CSV is NOT ignored).
+        # shipped to Render via git (see .gitignore - CSV is NOT ignored).
         # The /api/deals endpoint already falls back to CSV via load_deals();
         # we mirror that here so the health pill shows fresh data instead of
         # a permanent 'unknown' state.
@@ -876,14 +934,14 @@ def _compute_health_snapshot() -> dict:
             snapshot['status'] = _classify_freshness(snapshot['minutes_since_scrape'])
 
             # MC-336: SQLite is alive but empty (post-cold-boot, pre-pipeline)
-            # — fall through to the CSV fallback so the pill still surfaces
+            # - fall through to the CSV fallback so the pill still surfaces
             # the deployed dataset's freshness (file mtime as last_scrape_ts).
             if total == 0:
                 snapshot = _compute_health_snapshot_from_csv(snapshot)
         finally:
             conn.close()
     except Exception:
-        # Leave snapshot at zeroed default — the pill will show "no data"
+        # Leave snapshot at zeroed default - the pill will show "no data"
         # rather than 500'ing the page.
         pass
 
@@ -993,118 +1051,130 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/api/deals')
-def api_deals():
-    deals = load_deals()
+def _parse_deal_filters(args):
+    """MC-338: Parse filter params from a Flask request.args-like mapping
+    into a structured dict that both /api/deals and /api/deals/export.csv
+    consume via _apply_filters(). Single source of truth so the two
+    endpoints never drift.
 
-    # Parse filter params
-    beds_min = request.args.get('beds_min', type=int)
-    beds_max = request.args.get('beds_max', type=int)
-    baths_min = request.args.get('baths_min', type=float)
-    parking = request.args.get('has_parking', type=lambda v: v.lower() == 'true' if v else None)
-    price_min = request.args.get('price_min', type=int)
-    price_max = request.args.get('price_max', type=int)
-    neighbourhood = request.args.get('neighbourhood', '').strip().lower()
-    region = request.args.get('region', '').strip()
-    sort_by = request.args.get('sort', 'score')
-    max_commute = request.args.get('max_commute', type=int)
-    max_subway = request.args.get('max_subway', type=int)
-    commute_dest = request.args.get('commute_dest', '').strip()
-    hide_stale = request.args.get('hide_stale', type=lambda v: v.lower() == 'true' if v else False)
-    # MC-316: Source filter (kijiji / craigslist / all)
-    source = request.args.get('source', '').strip().lower()
-    # MC-323: Only NEW (6h) filter — surface listings marked fresh in MC-264.
-    # Accepts 'true' / '1' / 'yes' / 'false' / '0' / 'no' / ''. Missing or empty
-    # is treated as "no filter" so existing callers are unaffected.
-    only_new_raw = (request.args.get('is_new', '') or '').strip().lower()
-    only_new = only_new_raw in ('true', '1', 'yes')
-    # MC-325: Price-dropped filter — show only listings whose current price is
-    # at least 5% lower than the oldest recorded price in the last 14 days.
-    # Accepts the same truthy/falsy values as the is_new filter for consistency.
-    price_dropped_raw = (request.args.get('price_dropped', '') or '').strip().lower()
-    price_dropped = price_dropped_raw in ('true', '1', 'yes')
-    # MC-327: Max $/sqft filter. Numeric (step 0.5 in UI). Rows with null
-    # price_per_sqft (no sqft disclosed) are excluded — a missing-data row
-    # shouldn't be misclassified as "below the user's max $/sqft cap".
+    Filter params (all optional):
+        beds_min, beds_max, baths_min, has_parking, price_min, price_max,
+        neighbourhood, region, sort, max_commute, max_subway, commute_dest,
+        hide_stale, source, is_new, price_dropped, price_per_sqft_max,
+        has_image, include_fallback.
+
+    Returns a plain dict. truthy/falsy keys use the same convention as
+    /api/deals originally did (`'true'`/`'1'`/`'yes'` -> True).
+    """
+    def _truthy(v):
+        if v is None or v == '':
+            return False
+        return str(v).strip().lower() in ('true', '1', 'yes')
+
+    def _parking_int(v):
+        if v is None or v == '':
+            return None
+        return str(v).strip().lower() == 'true'
+
     try:
-        max_price_per_sqft = float(request.args.get('price_per_sqft_max', '') or '')
+        max_price_per_sqft = float(args.get('price_per_sqft_max', '') or '')
     except (TypeError, ValueError):
         max_price_per_sqft = None
-    # MC-332: With-photos filter. Accepts the same truthy values as the
-    # only_new / price_dropped filters for consistency. Missing / empty /
-    # false = no filter (all rows returned, regardless of photo presence).
-    has_image_raw = (request.args.get('has_image', '') or '').strip().lower()
-    has_image = has_image_raw in ('true', '1', 'yes')
-    # MC-333: include_fallback — when False (default), rows whose
-    # neighborhood_status is 'toronto_catchall' or 'low_signal_address'
-    # are hidden from /api/deals so the user sees only properly-resolved
-    # listings. Pass ?include_fallback=true to opt in to the unfiltered
-    # view (useful for debugging or for users who specifically want to
-    # see address-only / generic listings).
-    include_fallback_raw = (request.args.get('include_fallback', '') or '').strip().lower()
-    include_fallback = include_fallback_raw in ('true', '1', 'yes')
 
-    # Apply filters
-    if beds_min is not None:
-        deals = [d for d in deals if d['beds'] is not None and d['beds'] >= beds_min]
-    if beds_max is not None:
-        deals = [d for d in deals if d['beds'] is not None and d['beds'] <= beds_max]
-    if baths_min is not None:
-        deals = [d for d in deals if d['baths'] is not None and d['baths'] >= baths_min]
-    if parking is True:
-        deals = [d for d in deals if d['has_parking'] is True]
-    if price_min is not None:
-        deals = [d for d in deals if d['price'] >= price_min]
-    if price_max is not None:
-        deals = [d for d in deals if d['price'] <= price_max]
-    if neighbourhood:
-        deals = [d for d in deals if neighbourhood in d['neighbourhood'].lower()]
-    if region:
-        deals = [d for d in deals if d.get('region', '') == region]
-    if hide_stale:
+    return {
+        'beds_min': args.get('beds_min', type=int),
+        'beds_max': args.get('beds_max', type=int),
+        'baths_min': args.get('baths_min', type=float),
+        'has_parking': args.get('has_parking', type=_parking_int),
+        'price_min': args.get('price_min', type=int),
+        'price_max': args.get('price_max', type=int),
+        'neighbourhood': (args.get('neighbourhood', '') or '').strip().lower(),
+        'region': (args.get('region', '') or '').strip(),
+        'sort_by': args.get('sort', 'score'),
+        'max_commute': args.get('max_commute', type=int),
+        'max_subway': args.get('max_subway', type=int),
+        'commute_dest': (args.get('commute_dest', '') or '').strip(),
+        'hide_stale': _truthy(args.get('hide_stale', '')),
+        'source': (args.get('source', '') or '').strip().lower(),
+        'only_new': _truthy(args.get('is_new', '')),
+        'price_dropped': _truthy(args.get('price_dropped', '')),
+        'max_price_per_sqft': max_price_per_sqft,
+        'has_image': _truthy(args.get('has_image', '')),
+        'include_fallback': _truthy(args.get('include_fallback', '')),
+    }
+
+
+def _apply_filters(deals, parsed):
+    """MC-338: Apply the parsed filter dict (from _parse_deal_filters) to a
+    deals list. Returns the filtered list - does NOT sort or paginate, those
+    concerns stay in the caller (api_deals handles sort+pagination; the CSV
+    export endpoint doesn't need either).
+
+    Mirrors the original inline logic that lived in api_deals() 1:1 so the
+    /api/deals response shape and behaviour are unchanged.
+    """
+    f = parsed
+
+    if f['beds_min'] is not None:
+        deals = [d for d in deals if d.get('beds') is not None and d['beds'] >= f['beds_min']]
+    if f['beds_max'] is not None:
+        deals = [d for d in deals if d.get('beds') is not None and d['beds'] <= f['beds_max']]
+    if f['baths_min'] is not None:
+        deals = [d for d in deals if d.get('baths') is not None and d['baths'] >= f['baths_min']]
+    if f['has_parking'] is True:
+        deals = [d for d in deals if d.get('has_parking') is True]
+    if f['price_min'] is not None:
+        deals = [d for d in deals if d.get('price') is not None and d['price'] >= f['price_min']]
+    if f['price_max'] is not None:
+        deals = [d for d in deals if d.get('price') is not None and d['price'] <= f['price_max']]
+    if f['neighbourhood']:
+        deals = [d for d in deals if f['neighbourhood'] in (d.get('neighbourhood') or '').lower()]
+    if f['region']:
+        deals = [d for d in deals if d.get('region', '') == f['region']]
+    if f['hide_stale']:
         deals = [d for d in deals if not d.get('is_stale', False)]
-    # MC-316: source filter — case-insensitive; empty/all returns both
-    if source and source != 'all':
-        deals = [d for d in deals if d.get('source', '') == source]
-    # MC-323: Only NEW filter. Only applied when explicit truthy value is
-    # passed so that GET /api/deals (no param) still returns everything.
-    if only_new:
+    # MC-316: source filter - case-insensitive; empty/all returns both
+    if f['source'] and f['source'] != 'all':
+        deals = [d for d in deals if d.get('source', '') == f['source']]
+    # MC-323: Only NEW filter
+    if f['only_new']:
         deals = [d for d in deals if d.get('is_new', False) is True]
-    # MC-325: Price-dropped filter — only applied when explicit truthy value
-    # is passed. Combines cleanly with other filters (source, is_new, beds).
-    if price_dropped:
+    # MC-325: Price-dropped filter
+    if f['price_dropped']:
         deals = [d for d in deals if d.get('price_dropped', False) is True]
-    # MC-327: Max $/sqft filter. Drop rows where price_per_sqft is missing
-    # (cannot validate them against the user's cap) or exceeds the cap.
-    if max_price_per_sqft is not None and max_price_per_sqft > 0:
+    # MC-327: Max $/sqft filter - drop rows missing $/sqft or above the cap
+    if f['max_price_per_sqft'] is not None and f['max_price_per_sqft'] > 0:
         deals = [d for d in deals
                  if d.get('price_per_sqft') is not None
-                 and d['price_per_sqft'] <= max_price_per_sqft]
-    # MC-332: With-photos filter. Only applied on explicit truthy value so
-    # GET /api/deals (no param) returns the full row set unchanged. Uses the
-    # has_image flag computed in _normalize_row (True iff any usable photo
-    # URL exists). Combines cleanly with source/is_new/price_dropped/etc.
-    if has_image:
+                 and d['price_per_sqft'] <= f['max_price_per_sqft']]
+    # MC-332: With-photos filter
+    if f['has_image']:
         deals = [d for d in deals if d.get('has_image', False) is True]
-    # MC-333: Default-filter toronto_catchall, low_signal_address, and
-    # off_toronto rows so the user only sees listings that landed in a
-    # specific Toronto segment. Pass ?include_fallback=true to opt back
-    # in to the raw view (handy for QA / debugging or for users who
-    # want to see generic / address-only / non-Toronto listings).
-    if not include_fallback:
+    # MC-333: Default-filter toronto_catchall, low_signal_address, off_toronto
+    if not f['include_fallback']:
         deals = [
             d for d in deals
             if d.get('neighborhood_status') not in (
                 'toronto_catchall', 'low_signal_address', 'off_toronto',
             )
         ]
-    if max_commute is not None:
-        deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= max_commute]
+    if f['max_commute'] is not None:
+        deals = [d for d in deals if d.get('commute_minutes') is not None and d['commute_minutes'] <= f['max_commute']]
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
+    if f['max_subway'] is not None:
+        deals = [d for d in deals if d.get('station_walk_min') is not None and d['station_walk_min'] <= f['max_subway']]
 
-    # MC-270 AC5: Max subway walk filter
-    if max_subway is not None:
-        deals = [d for d in deals if d.get('station_walk_min') is not None and d['station_walk_min'] <= max_subway]
+    return deals
+
+
+@app.route('/api/deals')
+def api_deals():
+    deals = load_deals()
+
+    # MC-338: single source of truth for parsing + applying filters.
+    parsed = _parse_deal_filters(request.args)
+    deals = _apply_filters(deals, parsed)
+    sort_by = parsed['sort_by']
 
     # Sort
     reverse = sort_by not in ('price', 'days_ago', 'price_per_sqft')
@@ -1115,12 +1185,12 @@ def api_deals():
         'beds': 'beds',
         'baths': 'baths',
         'days_ago': 'days_ago',
-        # MC-324: days_listed — sort by how long a listing has been on the
+        # MC-324: days_listed - sort by how long a listing has been on the
         # market. The default UI label is "Longest Listed" so the natural
         # default order (reverse=False) is HIGHEST days_listed first. We
         # achieve this by sorting on a negated key when sort_by is days_listed.
         'days_listed': 'days_listed',
-        # MC-327: $/sqft — best value (lowest $/sqft) at index 0 by default.
+        # MC-327: $/sqft - best value (lowest $/sqft) at index 0 by default.
         'price_per_sqft': 'price_per_sqft',
     }
     key = key_map.get(sort_by, 'final_score')
@@ -1142,7 +1212,7 @@ def api_deals():
         # MC-327: Sort by $/sqft with nulls at the END regardless of direction.
         # Use float('inf') as the sentinel for nulls so ascending puts them
         # last, and descending (which reverses the whole list) keeps them
-        # last because inf + reverse(True) — actually wait, reverse(True)
+        # last because inf + reverse(True) - actually wait, reverse(True)
         # would put them first. To keep nulls last in BOTH directions we
         # use a tuple sort: (is_null, value), where is_null=True sorts after
         # is_null=False ascending.
@@ -1221,6 +1291,9 @@ def api_meta():
             'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [],
             'neighborhoods': [], 'new_count': 0, 'price_drop_count': 0,
             'with_photos_count': 0,
+            # MC-337: Summary stat-card values (full active set, not user-filtered).
+            'median_price': 0,
+            'total_monthly_savings': 0,
             'price_per_sqft_stats': {
                 'count_with_sqft': 0, 'count_without_sqft': 0,
                 'min': None, 'max': None, 'median': None, 'p25': None, 'p75': None,
@@ -1302,6 +1375,13 @@ def api_meta():
         # MC-332: Photo-bearing listing total. Drives the "(N photos)" hint
         # next to the new "With photos only" toggle in the filter bar.
         'with_photos_count': with_photos_count,
+        # MC-337: Median asking rent + total monthly savings across the full
+        # active data set. Drives the two new header stat cards. JS recomputes
+        # these on every renderDeals() so the cards reflect user-applied
+        # filters; the /api/meta values are the global fallback (e.g. on
+        # initial page load before /api/deals resolves).
+        'median_price': _median_price(deals),
+        'total_monthly_savings': _total_savings(deals),
         'price_per_sqft_stats': price_per_sqft_stats,
         # MC-329: Per-neighbourhood 30-day price-trend map. Same shape as
         # the field added to each /api/deals row. Neighbourhoods without
@@ -1315,7 +1395,7 @@ def api_meta():
 def api_deals_geo():
     """
     MC-256: Return deals enriched with lat/lng from neighbourhood centroids.
-    Uses get_centroid() for fuzzy matching — no external API calls.
+    Uses get_centroid() for fuzzy matching - no external API calls.
     Returns only listings that have a mappable neighbourhood.
     """
     from neighbourhood_lookup import get_centroid
@@ -1349,20 +1429,37 @@ def api_deals_geo():
 
 @app.route('/api/deals/export.csv')
 def api_export_csv():
-    """CSV export endpoint for data users. MC-262."""
+    """CSV export endpoint for data users. MC-262, filter-aware via MC-338."""
     import csv, io
+    # MC-338: Apply the same filter params as /api/deals so users exporting
+    # the current UI view get the filtered row set, not the full universe.
     deals = load_deals()
+    parsed = _parse_deal_filters(request.args)
+    deals = _apply_filters(deals, parsed)
+
     output = io.StringIO()
     if not deals:
-        output.write("no data\n")
-        return output.getvalue(), 200, {"Content-Type": "text/csv"}
+        # Preserve the original MC-262 empty payload shape so existing
+        # downstream consumers (and AC #4 "export returns CSV") don't
+        # regress. The export still 200s; we just emit a header-only CSV
+        # so callers don't have to special-case the body parsing.
+        output.write("neighbourhood,region,beds,baths,price,price_fmt,fair_value_fmt,pct_under,days_ago,is_stale,cautions,commute_minutes,link,source,final_score\n")
+        return output.getvalue(), 200, {
+            "Content-Type": "text/csv",
+            "Content-Disposition": "attachment; filename=deals.csv",
+            "X-Filter-Row-Count": "0",
+        }
     fieldnames = ['neighbourhood', 'region', 'beds', 'baths', 'price', 'price_fmt',
                   'fair_value_fmt', 'pct_under', 'days_ago', 'is_stale', 'cautions',
-                  'commute_minutes', 'link', 'final_score']
+                  'commute_minutes', 'link', 'source', 'final_score']  
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
     writer.writeheader()
     writer.writerows(deals)
-    return output.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=deals.csv"}
+    return output.getvalue(), 200, {
+        "Content-Type": "text/csv",
+        "Content-Disposition": "attachment; filename=deals.csv",
+        "X-Filter-Row-Count": str(len(deals)),
+    }
 
 
 # ── MC-321: Neighborhood stats drill-down ────────────────────────────────────
@@ -1423,7 +1520,7 @@ def api_neighborhood_price_history(slug):
 
     404 if the slug does not resolve to any active neighbourhood (matches
     the convention used by /api/neighborhoods/<slug>/stats).
-    Empty `series` is a valid 200 response — the page shows its empty-state
+    Empty `series` is a valid 200 response - the page shows its empty-state
     UI for "not enough data yet".
     """
     days = request.args.get('days', '30')
@@ -1431,7 +1528,7 @@ def api_neighborhood_price_history(slug):
         days = int(days)
     except (TypeError, ValueError):
         days = 30
-    # Clamp to a sensible range — the chart is meant to be a small sparkline,
+    # Clamp to a sensible range - the chart is meant to be a small sparkline,
     # not a multi-year deep dive.
     days = max(1, min(days, 365))
 
@@ -1602,7 +1699,7 @@ def _build_listing_detail_response(d: dict, idx: int):
     breakdown = {
         'listed_price': d['price'],
         'listed_price_fmt': d['price_fmt'],
-        'fair_value': d.get('fair_value_fmt', '—'),
+        'fair_value': d.get('fair_value_fmt', '-'),
         'pct_under': d['pct_under'],
         'pct_under_fmt': d['pct_under_fmt'],
         'deal_score': d.get('final_score', 0),
@@ -1610,12 +1707,12 @@ def _build_listing_detail_response(d: dict, idx: int):
     }
 
     caution_details = {
-        'Possible room rental — confirm it\'s a full unit': 'The listing title suggests this may be a single room in a shared unit, not a full apartment. Check the listing description and photos carefully — room rentals are priced per room, making them appear as extreme deals when compared against whole-unit averages.',
-        'Extremely cheap — likely room rental, scam, or data error': 'This listing is more than 40% below fair market value. In Toronto, this almost always means it is a room rental, a scam post, or a data scraping error. Do not proceed without verifying the full listing.',
-        'Unusually cheap — verify condition': 'This listing is more than 20% below the market median for its segment. Unusually low prices may indicate hidden issues (condition, location, undisclosed problems). Verify the property in person before committing.',
+        'Possible room rental - confirm it\'s a full unit': 'The listing title suggests this may be a single room in a shared unit, not a full apartment. Check the listing description and photos carefully - room rentals are priced per room, making them appear as extreme deals when compared against whole-unit averages.',
+        'Extremely cheap - likely room rental, scam, or data error': 'This listing is more than 40% below fair market value. In Toronto, this almost always means it is a room rental, a scam post, or a data scraping error. Do not proceed without verifying the full listing.',
+        'Unusually cheap - verify condition': 'This listing is more than 20% below the market median for its segment. Unusually low prices may indicate hidden issues (condition, location, undisclosed problems). Verify the property in person before committing.',
         'Listing may be stale': 'This listing has been active for more than 30 days. It may already be rented or the price may have changed.',
         'Size not disclosed': 'The listing does not disclose square footage. Neighbourhood averages may not be directly comparable.',
-        'Below typical basement threshold': 'A 1BR downtown listing under $1,100/mo is unusually cheap. Most basements in Downtown Toronto rent for $1,200–$1,800 for 1BR.',
+        'Below typical basement threshold': 'A 1BR downtown listing under $1,100/mo is unusually cheap. Most basements in Downtown Toronto rent for $1,200-$1,800 for 1BR.',
     }
     expanded_cautions = []
     for c in (d.get('cautions') or []):
@@ -1628,15 +1725,15 @@ def _build_listing_detail_response(d: dict, idx: int):
     if days is None:
         freshness_str = "Listing age unknown"
     elif days == 0:
-        freshness_str = "Listed today — very fresh!"
+        freshness_str = "Listed today - very fresh!"
     elif days <= 3:
-        freshness_str = f"Listed {days} days ago — fresh listing"
+        freshness_str = f"Listed {days} days ago - fresh listing"
     elif days <= 14:
-        freshness_str = f"Listed {days} days ago — normal age"
+        freshness_str = f"Listed {days} days ago - normal age"
     elif days <= 30:
-        freshness_str = f"Listed {days} days ago — consider verifying availability"
+        freshness_str = f"Listed {days} days ago - consider verifying availability"
     else:
-        freshness_str = f"Listed {days} days ago — likely stale, verify availability"
+        freshness_str = f"Listed {days} days ago - likely stale, verify availability"
 
     return jsonify({
         'idx': idx,
@@ -1899,7 +1996,7 @@ def api_alerts_post():
 
 @app.route('/api/alerts/<email>', methods=['DELETE'])
 def api_alerts_delete(email):
-    """MC-263: One-click unsubscribe — disables alert."""
+    """MC-263: One-click unsubscribe - disables alert."""
     import sqlite3
     email = email.strip()
     try:
@@ -2077,7 +2174,7 @@ def api_saved_searches_create():
         try: return float(v)
         except: return None
 
-    # MC-322: normalize filters_json — accept either a dict (auto-serialize)
+    # MC-322: normalize filters_json - accept either a dict (auto-serialize)
     # or a string (validate by re-parse). Reject obviously broken input early
     # rather than at the SQLite layer.
     raw_filters = data.get('filters_json')
@@ -2335,7 +2432,7 @@ def api_saved_searches_run_checks():
     and returns the summary dict. Optional JSON body:
       {"min_hours_between": 24, "send_fn": null}
 
-    `send_fn` is intentionally NOT exposed — the worker uses the live
+    `send_fn` is intentionally NOT exposed - the worker uses the live
     email_alerts.send_saved_search_alert_email function (or the stub when
     SENDGRID_API_KEY is missing). Tests POST here with monkey-patched persist
     functions; production calls this from find_deals.py.
@@ -2659,13 +2756,13 @@ def api_similar_listing(listing_id):
         return jsonify({'error': str(e)}), 500
 
 
-# MC-283: Telegram bot webhook — called by cron after each scrape run
+# MC-283: Telegram bot webhook - called by cron after each scrape run
 @app.route('/api/telegram/webhook', methods=['POST'])
 def api_telegram_webhook():
     """
     Called by the scraping cron after each run completes.
     Triggers Telegram deal alerts for all active subscribers.
-    Expected payload (optional): {"deals": [...]}  — if absent, fetches from DB
+    Expected payload (optional): {"deals": [...]}  - if absent, fetches from DB
     """
     try:
         deals_data = request.get_json() or {}
