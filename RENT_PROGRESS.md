@@ -1,7 +1,68 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** ✅ MC-334 complete. Title persistence fixed end-to-end. `find_deals.py` row builders now include `title`; SQLite `listings.title` is 100% populated for active listings (was 14.9% = 56/376). `/api/deals` returns 100% non-empty title (was 0%); `/api/listing/by-id/<listing_id>` endpoint returns the title in detail JSON. 34 new tests pass, 0 regressions in critical suite.
-**Last Updated:** 2026-07-09 12:50 UTC
+**Current Phase:** ✅ MC-338 complete. Filter-aware CSV export — `/api/deals/export.csv` now honors every filter that `/api/deals` does (single source of truth: `_parse_deal_filters()` + `_apply_filters()` in app.py). New "Export CSV" button in the filter action row triggers a download of the current filtered view via `buildParams()`; disabled with a tooltip when the filtered set is empty. CSV now includes `source` column so users can see which marketplace each row came from. New `X-Filter-Row-Count` header for downstream tooling. 51/51 new tests pass; 418/418 across 11 critical regression files pass.
+**Last Updated:** 2026-07-10 00:43 UTC
+
+---
+
+## MC-338 — Filter-Aware CSV Export + Export Button in Filter Bar (COMPLETE, in review)
+
+**Gap:** `/api/deals/export.csv` existed (MC-262) but only dumped the full unfiltered universe, and `templates/index.html` had no UI button — users would have to navigate to the URL by hand and get the entire row set even after applying filters. The filter logic was inline in `/api/deals` (~80 lines), so the export endpoint couldn't reuse it.
+
+**What was built:**
+
+- **`app.py` — `_parse_deal_filters(args)` (~50 lines):**
+  - Parses a Flask `request.args`-like mapping (or any `.get()`-supporting dict) into a flat structured dict.
+  - Helpers `_truthy` and `_parking_int` (inner closures) handle the tri-state `has_parking` (None / False / True) and the canonical truthy/falsy forms (`true`/`1`/`yes`).
+  - Returns keys: `beds_min`, `beds_max`, `baths_min`, `has_parking`, `price_min`, `price_max`, `neighbourhood`, `region`, `sort_by`, `max_commute`, `max_subway`, `commute_dest`, `hide_stale`, `source`, `only_new`, `price_dropped`, `max_price_per_sqft`, `has_image`, `include_fallback`.
+  - Defensive numeric parsing for `price_per_sqft_max` (garbage → None, empty → None).
+
+- **`app.py` — `_apply_filters(deals, parsed)` (~75 lines):**
+  - Pure function — no I/O, no Flask context. Mirrors the original inline `/api/deals` filter logic 1:1 so behaviour is unchanged.
+  - Returns the filtered list (does NOT sort or paginate; those concerns stay in `api_deals`).
+
+- **`app.py` — `api_deals()` refactor:** now calls `_parse_deal_filters()` + `_apply_filters()` instead of inline parsing/applying. Behaviour-preserving.
+
+- **`app.py` — `api_export_csv()` made filter-aware:** calls the same helpers, so a CSV export with `?beds_min=2&source=kijiji` returns the same filtered row set `/api/deals` would show. Added:
+  - `X-Filter-Row-Count: N` response header (downstream tooling can detect "0 rows due to filters" without parsing the body).
+  - `source` added to CSV fieldnames so users can see which marketplace each row came from.
+  - Empty result still 200s with header-only CSV (preserves MC-262 contract shape).
+
+- **`templates/index.html` — new "Export CSV" button** in the filter action row (after `clear_all_btn`):
+  - `id="export_csv_btn"`, brand-blue outline, attached to `onclick="exportFilteredCsv()"` with tooltip "Download the current filtered deals as a CSV file".
+
+- **`templates/index.html` — new JS:**
+  - `exportFilteredCsv()` — serializes live filter state via `buildParams()`, then triggers `/api/deals/export.csv?<qs>` in a hidden iframe (cache-busted with `_=<ms>` so repeat clicks don't get a stale CSV). Iframe approach keeps the deals page in place.
+  - `updateExportCsvState()` — called from `renderDeals()` so the button's disabled state stays in sync with `currentTotal`. Disabled + greyed + "No deals to export" tooltip when filtered view is empty; otherwise shows the active row count in the tooltip ("Download the current filtered view (N rows) as a CSV file").
+
+**Tests — `tests/test_mc338_export_csv.py` — 51 tests in 5 classes:**
+- **`TestParseDealFilters` (12):** empty-args defaults, int filters, truthy/falsy synonym sweep, lowercasing/stripping for source/neighbourhood, region-stripped-not-lowercased, `price_per_sqft_max` numeric / garbage / empty, `sort_by` default, `has_parking` tri-state.
+- **`TestApplyFilters` (18):** no-filter passthrough, `beds_min`/`beds_max` (with missing-beds skip), `price_range`, neighbourhood substring, region exact match, source lowercase + `'all'` short-circuit, `is_new`, `hide_stale`, `price_dropped`, `has_image`, `max_price_per_sqft` (drops missing), `include_fallback` default-hides vs opt-in keeps, **4-way combined filters** (only 1 of 4 sample rows matches all conditions), `max_commute` drops missing, `max_subway` drops missing.
+- **`TestApiDealsEndpointRegression` (3):** default, `?beds_min=3` filter integrity, `?price_max=1500` filter integrity (ensures the helper extraction didn't regress the existing endpoint).
+- **`TestApiExportCsvEndpoint` (10):** 200, Content-Type, Content-Disposition, X-Filter-Row-Count header, CSV parses correctly (header + rows or header-only when empty), filter parity with `/api/deals`, beds_min neighbourhood source filters, default `include_fallback` behaviour, header always emitted even on zero rows.
+- **`TestIndexHtmlWiring` (7):** button id, click handler, function definitions, `buildParams()` used inside the handler, `/api/deals/export.csv` URL referenced, `updateExportCsvState()` toggles `disabled` + consults `currentTotal` + references `export_csv_btn` id, `renderDeals()` calls the state updater.
+
+**Test coverage: 51/51 new MC-338 tests pass, 0 regressions across 11 critical test files (418 total: MC-313/316/319/321/323/328/329/332/335/336/337/338).**
+
+**Live verification (Flask test_client on real CSV / SQLite):**
+- `GET /api/deals/export.csv` → 200, `text/csv`, attachment; `X-Filter-Row-Count: 250`; 251-line body (header + 250 rows); `source` now in the fieldnames.
+- `GET /api/deals/export.csv?beds_min=99` → 200, `X-Filter-Row-Count: 0`; body is header-only CSV (parseable, 0 rows).
+- `GET /api/deals/export.csv?price_min=99999` → 200, `X-Filter-Row-Count: 0`.
+- `GET /api/deals/export.csv?source=kijiji&limit=200` → 200, every row has `source=kijiji`.
+- `GET /api/deals?price_max=2500` → `total: N`, `GET /api/deals/export.csv?price_max=2500` → `X-Filter-Row-Count: N` (filter parity).
+- `GET /api/deals/export.csv?include_fallback=true` → ≥ rows vs no-param (default-hide behaviour intact).
+
+**Self-audit findings:**
+- ✅ All 7 ACs met.
+- ⚠️ **Bug caught during smoke test:** initial CSV fieldnames omitted `source`, so users exporting Kijiji-only rows had no column telling them which marketplace each row came from. Added `source` to the fieldnames and to the empty-CSV header row. **Caught by `test_export_respects_source_filter` failing on the first run** — regression guard now in place.
+- 🔧 `source` is currently `''` (empty) for rows whose `_normalize_row` didn't emit it. Not a regression — those rows were always treated as "unknown source" by `/api/deals` too. Worth a follow-up to ensure `source` is always populated for active listings.
+- 🔒 CSV output contains no secrets/PII; fieldnames are stable and don't depend on user input.
+- 🔧 Helper is pure (no Flask context, no I/O) — easy to unit test, easy to reuse from any future endpoint that wants filtered deals.
+
+**Commit:** `61a0da98 MC-338: filter-aware CSV export + Export button in UI [Carl]` on `master`. Files: `app.py` (~+125 / -90 net, helpers + endpoint), `templates/index.html` (~+45 lines, button + 2 JS helpers + hook into `renderDeals()`), `tests/test_mc338_export_csv.py` (NEW, 716 lines).
+
+_(Updated: 2026-07-10 00:43 UTC)_
+
 
 ---
 

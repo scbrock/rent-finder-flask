@@ -369,7 +369,18 @@
     <!-- Stats -->
     <div class="stat-card"><div class="value" id="total_count">-</div><div class="label">Deals Found</div></div>
     <div class="stat-card"><div class="value" id="avg_under">-</div><div class="label">Avg % Under Market</div></div>
+    <!-- MC-337: Median Rent card. Drives context for "is the deal good?"
+         question -- users can immediately compare a deal's price to the
+         citywide median without opening the detail modal. -->
+    <div class="stat-card"><div class="value" id="median_rent">-</div><div class="label">Median Rent</div></div>
     <div class="stat-card"><div class="value" id="best_deal">-</div><div class="label">Best Deal</div></div>
+    <!-- MC-337: Total Monthly Savings card. Aggregate of (fair_value - price)
+         for every row whose pct_under > 0. "$X/mo" main, " $Y/yr" sub-line.
+         Tooltip on the value explains the calculation. -->
+    <div class="stat-card" title="Sum of (fair_value - price) across all currently-filtered under-market deals. /yr is 12x the monthly figure.">
+      <div class="value" id="total_savings">-</div>
+      <div class="label">Total Monthly Savings <span id="total_savings_yr" style="color:#888;font-weight:400;font-size:0.85em;"></span></div>
+    </div>
   </div>
 
   <div class="filters">
@@ -526,6 +537,12 @@
       <button id="clear_all_btn" type="button" style="display:none;background:#fff;color:#c1452d;border:1px solid #c1452d;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;" onclick="if(window.__compare){window.__compare.clearCompare();window.__compare.updateCompareBadge();window.__compare.syncRowCheckboxes();}" title="Clear all selected listings from compare set">
         <span id="clear_all_btn_label">Clear All (0)</span>
       </button>
+      <!-- MC-338: Export the current filtered view as CSV. The click handler
+           serializes the live filter state via buildParams() and opens
+           /api/deals/export.csv?… so what the user sees is what they download. -->
+      <button id="export_csv_btn" type="button" style="background:#fff;color:#1e5b94;border:1px solid #1e5b94;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;" onclick="exportFilteredCsv()" title="Download the current filtered deals as a CSV file">
+        <span>⬇ Export CSV</span>
+      </button>
       <span id="filter_count" class="filter-badge">0</span>
     </div>
   </div>
@@ -542,7 +559,15 @@
     </div>
     <div class="stat-card"><div class="value" id="total_count">-</div><div class="label">Deals Found Today</div></div>
     <div class="stat-card"><div class="value" id="avg_under">-</div><div class="label">Avg % Under Market</div></div>
+    <!-- MC-337: Median Rent + Total Monthly Savings mirror cards for the
+         "Deals Found Today" alt header bar (loaded after the You-Might-Also-
+         Like section). Same IDs as the primary header so JS updates both. -->
+    <div class="stat-card"><div class="value" id="median_rent">-</div><div class="label">Median Rent</div></div>
     <div class="stat-card"><div class="value" id="best_deal">-</div><div class="label">Best Deal Today</div></div>
+    <div class="stat-card" title="Sum of (fair_value - price) across all currently-filtered under-market deals. /yr is 12x the monthly figure.">
+      <div class="value" id="total_savings">-</div>
+      <div class="label">Total Monthly Savings <span id="total_savings_yr" style="color:#888;font-weight:400;font-size:0.85em;"></span></div>
+    </div>
   </div>
 
   <!-- MC-274: You Might Also Like - shown only if user has shortlisted listings -->
@@ -1142,6 +1167,30 @@ function updateFilterCount() {
   }
 }
 
+// MC-338: Wire the Export CSV button. Serializes the current filter state via
+// buildParams() and triggers /api/deals/export.csv?… which honors the same
+// filter params as /api/deals. Opening in a new tab keeps the deals page in
+// place so the user can keep browsing after the download kicks off.
+function exportFilteredCsv() {
+  const params = buildParams();
+  const qs = params.toString();
+  const url = '/api/deals/export.csv' + (qs ? '?' + qs : '');
+  // Use a hidden iframe so the file downloads without leaving the page; an
+  // anchor target=_blank would also work but the iframe approach is more
+  // reliable across browsers for forced-download Content-Disposition.
+  let iframe = document.getElementById('export_csv_iframe');
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'export_csv_iframe';
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+  }
+  // Cache-bust so the browser doesn't serve a stale CSV if the user clicks
+  // Export twice in a row with the same filter set.
+  const sep = qs ? '&' : '';
+  iframe.src = url + sep + '_=' + Date.now();
+}
+
 function resetFilters() {
   document.getElementById('beds_min').selectedIndex = 0;
   document.getElementById('baths_min').selectedIndex = 0;
@@ -1358,6 +1407,12 @@ function renderDeals(deals, pagination) {
     document.getElementById('total_count').textContent = '0';
     document.getElementById('avg_under').textContent = '-';
     document.getElementById('best_deal').textContent = '-';
+    // MC-337: zero out the new stat cards when no deals match.
+    document.getElementById('median_rent').textContent = '-';
+    const ts = document.getElementById('total_savings');
+    if (ts) ts.textContent = '-';
+    const tsy = document.getElementById('total_savings_yr');
+    if (tsy) tsy.textContent = '';
     // MC-319: hide Load more when there's nothing to show
     const moreBtn = document.getElementById('load_more_btn');
     if (moreBtn) moreBtn.style.display = 'none';
@@ -1374,6 +1429,36 @@ function renderDeals(deals, pagination) {
   const best = deals[0];
   document.getElementById('best_deal').textContent = best ? best.pct_under_fmt : '-';
 
+  // MC-337: Compute Median Rent + Total Monthly Savings from the CURRENT
+  // (filtered) deals array so the cards reflect what the user is actually
+  // looking at (e.g. "Median Rent for 2BR-only"). Backend /api/meta serves
+  // the global values; these client-side computations win whenever the
+  // /api/deals result is available. Match the rounding choices on the
+  // backend: median -> nearest $50, savings -> integer dollars.
+  const priceVals = deals.map(d => parseFloat(d.price)).filter(n => !isNaN(n) && n > 0);
+  if (priceVals.length) {
+    const sorted = priceVals.slice().sort((a,b) => a - b);
+    const n = sorted.length;
+    const medianRaw = n % 2 ? sorted[(n-1)/2] : (sorted[n/2-1] + sorted[n/2]) / 2;
+    const medianRounded = Math.round(medianRaw / 50) * 50;
+    document.getElementById('median_rent').textContent = '$' + medianRounded.toLocaleString();
+  } else {
+    document.getElementById('median_rent').textContent = '-';
+  }
+  let savings = 0;
+  for (const d of deals) {
+    const pct = parseFloat(d.pct_under);
+    const fv = parseFloat(d.fair_value);
+    const price = parseFloat(d.price);
+    if (!isNaN(pct) && pct > 0 && !isNaN(fv) && !isNaN(price) && fv > price) {
+      savings += (fv - price);
+    }
+  }
+  const ts = document.getElementById('total_savings');
+  const tsy = document.getElementById('total_savings_yr');
+  if (ts) ts.textContent = '$' + Math.round(savings).toLocaleString() + '/mo';
+  if (tsy) tsy.textContent = '· $' + Math.round(savings * 12).toLocaleString() + '/yr';
+
   const tbody = document.getElementById('deals_body');
   tbody.innerHTML = '';
   deals.forEach((d, i) => {
@@ -1389,6 +1474,27 @@ function renderDeals(deals, pagination) {
   }
   // MC-319: Initialise Load-more button visibility
   renderLoadMore();
+  // MC-338: Toggle Export CSV button state based on current row count.
+  updateExportCsvState();
+}
+
+// MC-338: Toggle Export CSV button enabled/disabled + tooltip based on the
+// current filtered view's row count. Disabled when currentTotal === 0 so
+// users don't click the button and get a confusing header-only CSV.
+function updateExportCsvState() {
+  const btn = document.getElementById('export_csv_btn');
+  if (!btn) return;
+  const total = (typeof currentTotal === 'number') ? currentTotal : 0;
+  btn.disabled = (total === 0);
+  if (total === 0) {
+    btn.title = 'No deals to export — adjust the filters to find at least one row.';
+    btn.style.opacity = '0.5';
+    btn.style.cursor = 'not-allowed';
+  } else {
+    btn.title = `Download the current filtered view (${total} row${total === 1 ? '' : 's'}) as a CSV file`;
+    btn.style.opacity = '';
+    btn.style.cursor = '';
+  }
 }
 
 // MC-319: Build the HTML string for a single deal row. Shared by renderDeals (first page)
