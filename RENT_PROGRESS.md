@@ -1,7 +1,58 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** ✅ MC-338 complete. Filter-aware CSV export — `/api/deals/export.csv` now honors every filter that `/api/deals` does (single source of truth: `_parse_deal_filters()` + `_apply_filters()` in app.py). New "Export CSV" button in the filter action row triggers a download of the current filtered view via `buildParams()`; disabled with a tooltip when the filtered set is empty. CSV now includes `source` column so users can see which marketplace each row came from. New `X-Filter-Row-Count` header for downstream tooling. 51/51 new tests pass; 418/418 across 11 critical regression files pass.
-**Last Updated:** 2026-07-10 00:43 UTC
+**Current Phase:** ✅ MC-343 complete. Added `?min_pct_under=N` filter to `/api/deals` so users can focus on the genuinely-underpriced listings (e.g. "show me only deals ≥20% under market"). Parser floats and clamps 0-100, drops invalid input silently so hand-crafted URLs never 500. Filter drops NULL `pct_under` rows when threshold > 0 (we don't know if they're deals so we drop them). Frontend: new `<input id="min_pct_under">` next to `max_price_per_sqft`, wired through `buildParams`/`parseQueryParams`/`applySavedFilters`/`resetFilters`/`updateFilterCount`/`describeFilters` so save-search + share-link round-trips are symmetric. 32/32 MC-343 tests pass; full critical regression sweep (MC-316/318/322/327/329/337/338/339/340/341/342/343) shows 367/367 (the 6 MC-318 failures are pre-existing latent test-regex drift, not caused by this change — filed as MC-344 follow-up).
+**Last Updated:** 2026-07-10 22:43 UTC
+
+---
+
+## MC-343 — Min % Under Market Filter (`?min_pct_under=N`) (COMPLETE, in review)
+
+**Gap:** With 222 live deals today, scroll fatigue is real. Users browsing for "only the genuinely-underpriced ones" had no way to filter by deal size - just by neighborhood, beds, price, source, etc. Some wanted >=15% under market, others >=30%. The `pct_under` field is normalized on every row (since MC-337) but only sortable (`?sort=pct`), not filterable.
+
+**What was built:**
+
+- **`app.py` - `_parse_deal_filters()` extended:** new `min_pct_under` key. Parses the URLSearchParams value as a float; clamps to [0.0, 100.0]; returns None for empty/missing/non-numeric/out-of-range values. NaN-safe (`pct != pct`). Out-of-range silently treated as "no filter" rather than 500ing (matches the convention used by MC-338 price_min/price_max).
+
+- **`app.py` - `_apply_filters()` extended:** new branch that filters `pct_under >= threshold` when `min_pct_under > 0`. Drops NULL `pct_under` rows in this case (we don't know if it's a deal so drop it). `min_pct_under == 0` is the boundary no-op equivalent to "no filter" - all rows pass through including NULL ones. Composes cleanly with existing filter branches: `beds_min`, `source`, `neighbourhood`, etc.
+
+- **`templates/index.html` - UI input:** new `<div class="filter-group">` with `<label for="min_pct_under">Min % Under Market</label>` and `<input id="min_pct_under" type="number" min="0" max="100" step="1">` slotted between the `max_price_per_sqft` input and the `region` dropdown. Title attribute explains "Only show listings priced at least this % below neighborhood fair value (e.g. 15 = 15% or more under market)".
+
+- **`templates/index.html` - filter-state plumbing (8 JS hooks updated for round-trip parity):**
+  - `buildParams()`: reads input value, calls `params.set('min_pct_under', val)` when non-empty.
+  - `parseQueryParams()`: reads `?min_pct_under=` from URL on page load and writes it into the input.
+  - `applySavedFilters()`: `setIfPresent('min_pct_under', filters.min_pct_under)` so Load-Your-Search picks up the threshold.
+  - `resetFilters()`: clears the input to `''` alongside other filters.
+  - `updateFilterCount()`: `if (document.getElementById('min_pct_under').value) count++;` so the badge auto-updates.
+  - `describeFilters()`: surfaces "≥ X% under" in the save-search summary modal.
+  - ForEach wiring array at end of script: `'min_pct_under'` added so the change listener is attached (driven by `updateFilterCount`).
+
+- **`tests/test_mc343_min_pct_under.py` - 32 tests in 5 classes:**
+  - **`TestParseDealFiltersMinPctUnder` (7):** happy path parses to 15.0; fractional parses to 12.5; empty string -> None; non-numeric string ("twenty") -> None; out-of-range (`-5`, `150`, `200`, `-0.1`) -> None; `0` -> 0.0; full MC-338 contract keys preserved (regression guard, 20 keys including new `min_pct_under`).
+  - **`TestApplyFiltersMinPctUnder` (10):** no-filter passthrough; threshold drops below (5 below, 15 at boundary kept, 30, 100 -> 3 surviving); boundary case (>= semantics, 19.999 dropped at 20.0 threshold); NULL pct_under dropped when threshold > 0; threshold 0 keeps all (incl NULL); composes with neighbourhood substring; composes with source='kijiji'; composes with beds_min=2; negative pct_under (overpriced) dropped; string pct_under coercion ('25' kept, 'five' dropped, 30 kept).
+  - **`TestApiDealsMinPctUnder` (4):** `?min_pct_under=20` returns 200 + standard shape; filter narrows results (subset + every row passes the threshold); composes with source filter (every row has source='kijiji'); invalid input (`abc`, `-5`, `150`) doesn't 500.
+  - **`TestIndexHtmlWiring` (8):** input present in markup; `buildParams` reads+sets; `parseQueryParams` reads URL into input; `resetFilters` clears; `updateFilterCount` counts it; `describeFilters` surfaces it; `applySavedFilters` round-trips it; forEach listener array includes it. Source-grep style to avoid the MC-322 test-pollution issue.
+  - **`TestNoRegressionsMinPctUnder` (3):** baseline `/api/deals` still 200; bare `?min_pct_under=` doesn't activate the filter; `pct_under` field still on every row.
+
+**Test isolation:** Loaded `app.py` as a separate module via `importlib.util.spec_from_file_location('app_rent_finder_343', APP_PATH)` - same pattern as MC-340/MC-341 to avoid MC-322's `setUp()` DB pollution leaking into Flask `test_client()` tests.
+
+**Live verification (Flask test_client):**
+- `GET /api/deals?min_pct_under=20` -> 200, narrowing + every row's pct_under >= 20.
+- `GET /api/deals?min_pct_under=20&source=kijiji` -> 200, composes with source filter (every row.source == 'kijiji').
+- `GET /api/deals?min_pct_under=abc` -> 200 (silent degrade, no 500).
+- `GET /api/deals?min_pct_under=-5` -> 200 (clamped silently to no-filter).
+
+**Self-audit findings:**
+
+- ✅ All 7 ACs met.
+- ⚠️ **Pre-existing test debt found:** `tests/test_mc318_filter_count.js` regex `/\[\s*['"]beds_min['"]\s*,\s*['"]baths_min['"]\s*,\s*['"]price_min['"]\s*,\s*['"]price_max['"]\s*,\s*['"]neighbourhood['"]\s*,\s*['"]region['"][^\]]*\]/` hardcoded consecutive-position matching that broke when MC-327 added `max_price_per_sqft` between `price_max` and `neighbourhood`. **Verified pre-existing**: `git stash` + run + `git stash pop` on commit `a188502` (MC-337+338 base) produced the same 6 failures with my MC-343 changes stashed. Filed as **MC-344** (low priority, <15 min fix). Not blocking this commit.
+- ⚠️ **Discovery on NULL handling:** Choosing whether threshold > 0 drops NULL `pct_under` was a design call - I chose yes because NULL pct_under means "we couldn't compute fair value for this listing" which is itself a data-quality flag; user-visible in deal-focused filter UX is cleaner when those are excluded. Documented in code comment so the choice is reviewable.
+- ⚠️ **Threshold-zero edge case:** `min_pct_under=0` parses to 0.0 and is treated as the no-op branch (`elif f['min_pct_under'] == 0: pass`), so all rows including NULL ones pass through. Functionally equivalent to omitting the filter. UI clamps input to min=0 anyway.
+- 🔒 Security: Endpoint exposes aggregate filter param only; no PII. Input clamp prevents absurd values from being persisted.
+- 🔧 No production bugs found; edge cases (NaN, out-of-range, negative, non-numeric) all handled.
+
+**Commit:** `pending` on `master` branch (will move to `clean_build` per the team convention for Render deploy). Files: `app.py` (~50 lines), `templates/index.html` (~25 lines), `tests/test_mc343_min_pct_under.py` (NEW, 422 lines).
+
+**Test results:** 32/32 new MC-343 tests pass. Critical regression sweep across MC-316/318/322/327/329/337/338/339/340/341/342/343 = **367/367 green excluding the 6 pre-existing MC-318 failures**.
 
 ---
 

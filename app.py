@@ -70,7 +70,7 @@ def _days_ago_class(days_ago: int) -> str:
 # only rediscovered by our scraper last week will have a low days_ago but
 # a high days_listed - useful for users who care about how long the unit has
 # actually been available, and a stronger signal for "potentially negotiable".
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 def _days_listed_from_first_seen(first_seen_raw, now_utc=None):
     """Compute integer days between first_seen ISO timestamp and now (UTC).
@@ -117,6 +117,36 @@ def _days_listed_class(days_listed) -> str:
     if days_listed <= 30:
         return 'listed-medium'
     return 'listed-stale'
+
+
+def _new_today_count(deals, now_utc=None):
+    """Return count of active deals listed within the last 24 hours.
+
+    Used by the /api/meta `new_today` field and the header pill in the UI
+    ("🔥 N new today" indicator that links to the existing Only NEW filter).
+
+    Source-of-truth:
+      - SQLite path: `days_listed == 0` means first_seen is between 0 and
+        ~24h ago (days_listed floors at whole days via timedelta.days).
+      - CSV fallback: `_normalize_row` falls back to `days_ago` when
+        first_seen is unavailable, so days_listed == 0 means source-side
+        `days_ago == 0` i.e. posted today on the source.
+
+    Edge cases:
+      - deals None / empty list -> 0
+      - missing days_listed field -> skipped
+      - days_listed == 0.5 (mid-day fractional) doesn't occur because the
+        source field is int; non-int values are skipped via isinstance check.
+      - now_utc parameter exposed for deterministic testing.
+    """
+    if not deals:
+        return 0
+    n = 0
+    for d in deals:
+        dl = d.get('days_listed')
+        if isinstance(dl, int) and dl == 0:
+            n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -871,10 +901,16 @@ def _compute_health_snapshot() -> dict:
         try:
             now = datetime.now(timezone.utc)
 
-            # Per-source last scrape_ts (most recent run per source)
+            # MC-342: Per-source last scrape_ts (most recent run per source).
+            # The DB stores source as 'Kijiji' / 'Craigslist' (capitalized first
+            # letter, written by find_deals.py), but the previous query used a
+            # case-sensitive `WHERE source IN ('kijiji', 'craigslist')` which
+            # silently matched zero rows - so the freshness pill always showed
+            # stale data even when the pipeline was healthy. LOWER(source) keeps
+            # the query case-insensitive without changing the on-disk shape.
             scrape_rows = conn.execute(
                 "SELECT source, run_ts FROM scrape_runs "
-                "WHERE source IN ('kijiji', 'craigslist') "
+                "WHERE LOWER(source) IN ('kijiji', 'craigslist') "
                 "ORDER BY run_ts DESC"
             ).fetchall()
             last_per_src: dict[str, str] = {}
@@ -1061,7 +1097,7 @@ def _parse_deal_filters(args):
         beds_min, beds_max, baths_min, has_parking, price_min, price_max,
         neighbourhood, region, sort, max_commute, max_subway, commute_dest,
         hide_stale, source, is_new, price_dropped, price_per_sqft_max,
-        has_image, include_fallback.
+        has_image, include_fallback, min_pct_under.
 
     Returns a plain dict. truthy/falsy keys use the same convention as
     /api/deals originally did (`'true'`/`'1'`/`'yes'` -> True).
@@ -1080,6 +1116,29 @@ def _parse_deal_filters(args):
         max_price_per_sqft = float(args.get('price_per_sqft_max', '') or '')
     except (TypeError, ValueError):
         max_price_per_sqft = None
+
+    # MC-343: min_pct_under - the "only show me great deals" filter. Parse
+    # as a float, clamp to [0.0, 100.0], fall back to None (no filter) for
+    # blank or non-numeric input. Negative numbers are silently treated as
+    # no filter rather than rejecting the request - the UI clamps to 0 but
+    # we don't want a hand-crafted URL to 500.
+    raw_min_pct = args.get('min_pct_under', None)
+    if raw_min_pct is None or raw_min_pct == '':
+        min_pct_under = None
+    else:
+        try:
+            min_pct_under = float(raw_min_pct)
+        except (TypeError, ValueError):
+            min_pct_under = None
+        else:
+            # NaN check + clamp to sane bounds. >100 keeps "show only the
+            # best deals" usable but values beyond aren't physically possible
+            # (pct_under is a percentage); silent clamp matches neighbour
+            # filters (price_min<0 doesn't 500 either).
+            if min_pct_under != min_pct_under:  # NaN
+                min_pct_under = None
+            elif min_pct_under < 0 or min_pct_under > 100:
+                min_pct_under = None
 
     return {
         'beds_min': args.get('beds_min', type=int),
@@ -1101,6 +1160,7 @@ def _parse_deal_filters(args):
         'max_price_per_sqft': max_price_per_sqft,
         'has_image': _truthy(args.get('has_image', '')),
         'include_fallback': _truthy(args.get('include_fallback', '')),
+        'min_pct_under': min_pct_under,
     }
 
 
@@ -1163,6 +1223,26 @@ def _apply_filters(deals, parsed):
         deals.sort(key=lambda d: d.get('commute_minutes', 999))
     if f['max_subway'] is not None:
         deals = [d for d in deals if d.get('station_walk_min') is not None and d['station_walk_min'] <= f['max_subway']]
+    # MC-343: Minimum % under market filter. Drops overpriced/flat-market
+    # rows. Listings with missing pct_under are kept ONLY if the threshold
+    # is 0 (so a stray NULL doesn't disappear on the no-filter default);
+    # otherwise we treat NULL as "we don't know if it's a deal" and drop it.
+    if f['min_pct_under'] is not None and f['min_pct_under'] > 0:
+        threshold = f['min_pct_under']
+        def _keep_pct(d):
+            pct = d.get('pct_under')
+            if pct is None:
+                return False
+            try:
+                return float(pct) >= threshold
+            except (TypeError, ValueError):
+                return False
+        deals = [d for d in deals if _keep_pct(d)]
+    elif f['min_pct_under'] == 0:
+        # threshold of 0 means "anything priced at-market or below" - keep
+        # NULL pct_under too. This is a pure "no filter" semantic that
+        # matches the default behaviour.
+        pass
 
     return deals
 
@@ -1289,7 +1369,12 @@ def api_meta():
     if not deals:
         return jsonify({
             'beds': [], 'price': [0, 0], 'baths': [], 'regions': [], 'sources': [],
-            'neighborhoods': [], 'new_count': 0, 'price_drop_count': 0,
+            'neighborhoods': [], 'new_count': 0,
+            # MC-339: Header-pill data — count of deals first seen by us in
+            # the last 24h. Zero on empty data so the UI's pill can hide
+            # itself cleanly via `if (new_today > 0)`.
+            'new_today': 0,
+            'price_drop_count': 0,
             'with_photos_count': 0,
             # MC-337: Summary stat-card values (full active set, not user-filtered).
             'median_price': 0,
@@ -1313,6 +1398,13 @@ def api_meta():
     # next to the Only NEW toggle. Computed before any user-supplied filter
     # so the count reflects the full data set (the "what's new today" total).
     new_count = sum(1 for d in deals if d.get('is_new', False) is True)
+    # MC-339: Count of deals first seen by us in the last 24h. Supplements
+    # new_count (is_new=1 = first 6h) by extending the window to 24h so the
+    # header pill "🔥 N new today" reflects the full daily batch added across
+    # all cron runs (every 2h). Source of truth: days_listed == 0 (which
+    # floor-days the first_seen timestamp per _days_listed_from_first_seen,
+    # or falls back to days_ago on the CSV code path).
+    new_today = _new_today_count(deals)
     # MC-325: Count of listings with a confirmed price drop in the last 14d
     # (default 5% threshold). Used by the UI to render a "(N drops)" badge
     # next to the Price Drop toggle so users see the total at a glance.
@@ -1371,6 +1463,10 @@ def api_meta():
         'sources': sources,
         'neighborhoods': neighborhoods,
         'new_count': new_count,
+        # MC-339: 24h window of first-seen listings. Drives the new
+        # "🔥 N new today" pill in the header. Aliased to the empty
+        # branch above so the contract shape stays consistent.
+        'new_today': new_today,
         'price_drop_count': price_drop_count,
         # MC-332: Photo-bearing listing total. Drives the "(N photos)" hint
         # next to the new "With photos only" toggle in the filter bar.
@@ -1760,6 +1856,568 @@ def _build_listing_detail_response(d: dict, idx: int):
         'cautions': expanded_cautions,
         'breakdown': breakdown,
     })
+
+
+def _safe_og_text(s: str, limit: int = 200) -> str:
+    """MC-340: Strip control chars + cap length for OG/Twitter meta tags.
+    Returns '' for None/empty input. Truncates with ellipsis if too long.
+    """
+    if not s:
+        return ''
+    cleaned = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(s)).strip()
+    if len(cleaned) > limit:
+        cleaned = cleaned[: max(0, limit - 1)].rstrip() + '…'
+    return cleaned
+
+
+def _share_og_description(d: dict) -> str:
+    """MC-340: Build a human-readable share description like
+    'Toronto 1BR for $1,750 in Liberty Village — 17% under market fair value ($2,100).'
+    """
+    beds = d.get('beds')
+    beds_str = 'Studio' if beds == 0 else f'{int(beds)}BR' if beds is not None else 'Listing'
+    price = d.get('price_fmt') or (f"${int(d['price']):,}" if d.get('price') else '')
+    nbhd = d.get('neighbourhood') or 'Toronto'
+    fv = d.get('fair_value_fmt') or ''
+    pct = d.get('pct_under') or 0
+    parts = [f'Toronto {beds_str} for {price} in {nbhd}']
+    if pct and pct > 0 and fv and fv != '-':
+        parts.append(f'— {pct:g}% under market fair value ({fv})')
+    elif pct and pct > 0:
+        parts.append(f'— {pct:g}% under market fair value')
+    return ''.join(parts) + '.'
+
+
+# ── MC-341: Street-level building dedup ─────────────────────────────────────
+# Some buildings appear as multiple listings (unit 1 vs unit 5, basement vs
+# upper, bachelor vs 1BR in the same tower). Users browsing for a deal want
+# to see all available units in one place, not hunt through the table.
+
+# Match Toronto street addresses like "380 Davenport Rd.", "829 Pape Ave. BSMT",
+# "200-222 Elm Street", "117 CHAPLIN CRES", "386 YONGE ST. 1816".
+# Captures: (1) street number (with optional range like 200-222),
+# (2) street name (1-4 words), (3) street type (Ave/St/Rd/Dr/etc).
+# NB: directional suffix (W/E) is intentionally NOT captured - "KING ST W" and
+# "KING ST E" would incorrectly match the same slug for the same street number,
+# and our real-data dedup signal is stronger from number + name + type.
+_ADDR_RE = re.compile(
+    r'\b(\d{1,5}(?:-\d{1,5})?)\s+'
+    r'([A-Za-z\']+(?:\s+[A-Za-z\']+){0,3})\s+'
+    r'(Ave|Avenue|St|Street|Rd|Road|Dr|Drive|Blvd|Boulevard|Ln|Lane|Ct|Court|Pl|Place|Way|Cres|Crescent|Sq|Square)\b',
+    re.IGNORECASE,
+)
+# Canonical street-type form for matching "Street" == "St" etc.
+_ST_TYPE_MAP = {
+    'ave': 'Ave', 'avenue': 'Ave',
+    'st': 'St', 'street': 'St',
+    'rd': 'Rd', 'road': 'Rd',
+    'dr': 'Dr', 'drive': 'Dr',
+    'blvd': 'Blvd', 'boulevard': 'Blvd',
+    'ln': 'Ln', 'lane': 'Ln',
+    'ct': 'Ct', 'court': 'Ct',
+    'pl': 'Pl', 'place': 'Pl',
+    'way': 'Way',
+    'cres': 'Cres', 'crescent': 'Cres',
+    'sq': 'Sq', 'square': 'Sq',
+}
+# Slug-friendly street type (no periods, lowercase)
+_ST_TYPE_SLUG = {
+    'ave': 'ave', 'avenue': 'ave',
+    'st': 'st', 'street': 'st',
+    'rd': 'rd', 'road': 'rd',
+    'dr': 'dr', 'drive': 'dr',
+    'blvd': 'blvd', 'boulevard': 'blvd',
+    'ln': 'ln', 'lane': 'ln',
+    'ct': 'ct', 'court': 'ct',
+    'pl': 'pl', 'place': 'pl',
+    'way': 'way',
+    'cres': 'cres', 'crescent': 'cres',
+    'sq': 'sq', 'square': 'sq',
+}
+
+
+def _extract_address(text: str):
+    """MC-341: Extract (street_number, street_name, street_type_canonical)
+    from a free-text title. Returns None if no Toronto-style address is found.
+
+    Examples:
+      '380 DAVENPORT RD. #5' -> ('380', 'davenport', 'Rd')
+      '200-222 Elm Street' -> ('200-222', 'elm', 'St')
+      '127 SCARLETT RD. #4' -> ('127', 'scarlett', 'Rd')
+      '117 CHAPLIN CRES' -> ('117', 'chaplin', 'Cres')
+
+    NB: Returns the type in canonical display form ('St', 'Ave' etc.) so the
+    human-readable address always renders consistently regardless of which
+    variant appears in the source title. Use _street_slug() for the URL form.
+    """
+    if not text:
+        return None
+    m = _ADDR_RE.search(text)
+    if not m:
+        return None
+    num = m.group(1)
+    name = m.group(2).strip().lower()
+    stype_raw = m.group(3).lower()
+    stype_canonical = _ST_TYPE_MAP.get(stype_raw)
+    if not stype_canonical:
+        return None
+    return num, name, stype_canonical
+
+
+def _street_slug(num: str, name: str, stype_canonical: str) -> str:
+    """MC-341: Build URL slug from extracted address components.
+    '380 Davenport Rd' -> '380-davenport-rd'
+    '200-222 Elm Street' -> '200-222-elm-st'
+    '9 Stag Hill Dr' -> '9-stag-hill-dr' (spaces in multi-word names hyphenated)
+    """
+    stype_slug = _ST_TYPE_SLUG.get(stype_canonical.lower(), stype_canonical.lower())
+    name_slug = name.replace(' ', '-').replace("'", '')
+    return f'{num}-{name_slug}-{stype_slug}'
+
+
+def _address_display(num: str, name: str, stype_canonical: str) -> str:
+    """MC-341: Human-readable form for headers / meta tags.
+    '380-davenport-rd' components -> '380 Davenport Rd'.
+    Title-cases the street name (handles 'ST. CLAIRS' -> 'St. Clairs').
+    """
+    parts = name.split()
+    pretty = ' '.join(p.capitalize() for p in parts)
+    return f'{num} {pretty} {stype_canonical}'
+
+
+def _extract_unit_hint(text: str) -> str:
+    """MC-341: Extract a short unit/suite hint from a listing title for display.
+
+    Captures common Toronto multi-unit identifiers: '#5', 'Unit 12', 'BSMT',
+    'LOWER', 'UPPER', 'MAIN', 'GARDEN SUITE', 'PH', 'LOFT', 'Coach House'.
+    Returns '' if nothing meaningful is found (whole-building or single-unit).
+
+    Examples:
+      '380 DAVENPORT RD. #5 - STUDIO' -> '#5'
+      '26 ROCKVALE AVE., BSMT - 1 Bed' -> 'BSMT'
+      '117 CHAPLIN CRES., GARDEN SUITE' -> 'Garden Suite'
+      '386 YONGE ST. 1816' -> '1816'
+      '1030 King St W DNA3 Modern 1 Bed' -> ''
+    """
+    if not text:
+        return ''
+    t = text.strip()
+    # Suite/number patterns — capture only digits+letters, not trailing punctuation
+    m = re.search(r'#\s*([A-Za-z0-9]+)', t)
+    if m:
+        return f"#{m.group(1)}"
+    m = re.search(r'\bUnit\s+([A-Za-z0-9]+)', t, re.IGNORECASE)
+    if m:
+        return f"Unit {m.group(1)}"
+    m = re.search(r'\bSuite\s+([A-Za-z0-9]+)', t, re.IGNORECASE)
+    if m:
+        return f"Suite {m.group(1)}"
+    m = re.search(r'\bApt\s+([A-Za-z0-9]+)', t, re.IGNORECASE)
+    if m:
+        return f"Apt {m.group(1)}"
+    # Unit-type descriptors (case-sensitive in title to avoid false positives).
+    # Ordered so longer phrases match before their shorter prefixes
+    # (GARDEN SUITE before SUITE, COACH HOUSE before HOUSE).
+    for kw in ['GARDEN SUITE', 'COACH HOUSE', 'BSMT', 'BASEMENT',
+               'LOWER', 'UPPER', 'MAIN', 'PENTHOUSE', 'LOFT']:
+        if kw in t.upper():
+            return kw.title() if kw not in ('BSMT',) else kw
+    # Trailing 1-4 digit number right after the street type (e.g. "386 YONGE ST. 1816"
+    # or "140 SPRINGHURST AVE 41"). Anchored AFTER the street type so it can
+    # never accidentally match the street number itself.
+    m = re.search(r'(?:St|Ave|Rd|Dr|Blvd|Cres|Ln|Pl|Way)\s*\.?\s+(\d{1,4})\b', t, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return ''
+
+
+def _building_display_address(text: str) -> str:
+    """MC-341: Best-effort human-readable address from a title for the
+    building page header. Returns the address-only string (no unit hint),
+    or '' if no address can be parsed.
+    """
+    if not text:
+        return ''
+    parsed = _extract_address(text)
+    if not parsed:
+        return ''
+    num, name, stype = parsed
+    return _address_display(num, name, stype)
+
+
+def _dedup_by_street(deals: list, min_units: int = 2) -> list:
+    """MC-341: Group active listings by extracted street address.
+
+    Returns a list of building-group dicts, one per street with >= min_units
+    active listings. Each dict contains:
+      - street_slug: URL-safe identifier (e.g. '380-davenport-rd')
+      - address: human-readable form (e.g. '380 Davenport Rd')
+      - neighbourhood: most common neighbourhood across the units (mode)
+      - region: most common region across the units (mode)
+      - units: list of normalized deal dicts in this building (sorted by price asc)
+      - unit_count: len(units)
+      - min_price / max_price: $/mo range across the units
+      - median_price: $/mo median across the units
+      - min_pct_under / max_pct_under: deal-score range
+      - has_deals: True if any unit has pct_under > 0
+
+    Listings without an extractable street address are silently dropped from
+    the output - they don't form a multi-unit building.
+
+    Sorted by min_price ascending (cheapest building first), with tiebreaker
+    on unit_count descending (more units = more interesting).
+    """
+    if not deals:
+        return []
+    # Group by street_slug
+    buckets: dict = {}
+    no_address = 0
+    for d in deals:
+        title = d.get('title') or ''
+        parsed = _extract_address(title)
+        if not parsed:
+            no_address += 1
+            continue
+        num, name, stype = parsed
+        slug = _street_slug(num, name, stype)
+        buckets.setdefault(slug, {
+            'street_slug': slug,
+            'address': _address_display(num, name, stype),
+            '_num': num,
+            '_name': name,
+            '_stype': stype,
+            'units': [],
+            'neighbourhoods': [],
+            'regions': [],
+        })
+
+    # Second pass: assign units + collect neighbourhood/region for mode
+    for d in deals:
+        title = d.get('title') or ''
+        parsed = _extract_address(title)
+        if not parsed:
+            continue
+        num, name, stype = parsed
+        slug = _street_slug(num, name, stype)
+        bucket = buckets.get(slug)
+        if bucket is None:
+            continue
+        # Augment the unit dict with a unit hint for the page
+        d2 = dict(d)
+        d2['unit_hint'] = _extract_unit_hint(title)
+        bucket['units'].append(d2)
+        nbhd = d.get('neighbourhood') or ''
+        region = d.get('region') or ''
+        if nbhd:
+            bucket['neighbourhoods'].append(nbhd)
+        if region:
+            bucket['regions'].append(region)
+
+    # Build the response list, filtered by min_units
+    result = []
+    for slug, bucket in buckets.items():
+        if len(bucket['units']) < min_units:
+            continue
+        units = bucket['units']
+        # Sort units by price ascending (cheapest first), tiebreak on final_score desc
+        units_sorted = sorted(units, key=lambda u: (
+            float(u.get('price') or 0) if u.get('price') is not None else 1e18,
+            -float(u.get('final_score') or 0),
+        ))
+        prices = [float(u.get('price') or 0) for u in units_sorted if u.get('price')]
+        pcts = [float(u.get('pct_under') or 0) for u in units_sorted]
+        nbhd_mode = _mode(bucket['neighbourhoods']) or 'Toronto'
+        region_mode = _mode(bucket['regions']) or ''
+        result.append({
+            'street_slug': slug,
+            'address': bucket['address'],
+            'neighbourhood': nbhd_mode,
+            'region': region_mode,
+            'units': units_sorted,
+            'unit_count': len(units_sorted),
+            'min_price': min(prices) if prices else 0,
+            'max_price': max(prices) if prices else 0,
+            'median_price': _median(prices) if prices else 0,
+            'min_pct_under': min(pcts) if pcts else 0,
+            'max_pct_under': max(pcts) if pcts else 0,
+            'has_deals': any(float(u.get('pct_under') or 0) > 0 for u in units_sorted),
+        })
+
+    # Sort: cheapest first (min_price asc), tiebreak on more units first
+    result.sort(key=lambda g: (g['min_price'], -g['unit_count']))
+    return result
+
+
+def _mode(items: list):
+    """MC-341 helper: return the most common value in a list, or '' if empty.
+    Ties broken by first-seen order. Empty/None entries are skipped."""
+    if not items:
+        return ''
+    counts: dict = {}
+    order: list = []
+    for it in items:
+        if it in (None, ''):
+            continue
+        if it not in counts:
+            counts[it] = 0
+            order.append(it)
+        counts[it] += 1
+    if not counts:
+        return ''
+    best = max(order, key=lambda x: counts[x])
+    return best
+
+
+def _find_building(deals: list, street_slug: str):
+    """MC-341: Look up the building group for a street_slug.
+    Returns the group dict (see _dedup_by_street) or None if not found.
+    """
+    if not deals or not street_slug:
+        return None
+    for group in _dedup_by_street(deals, min_units=1):
+        if group['street_slug'] == street_slug:
+            return group
+    return None
+
+
+def _building_og_description(group: dict) -> str:
+    """MC-341: Build a share description for a building page.
+
+    Examples:
+      '3 units available at 140 Springhurst Ave — prices from $2,150 to $2,600/mo. Best deal: 17% under market.'
+      '2 units available at 1030 King St — prices from $1,750 to $2,300/mo. Best deal: 23% under market.'
+    """
+    if not group:
+        return ''
+    n = group.get('unit_count') or 0
+    addr = group.get('address') or 'Toronto'
+    min_p = group.get('min_price') or 0
+    max_p = group.get('max_price') or 0
+    max_pct = group.get('max_pct_under') or 0
+    unit_word = 'unit' if n == 1 else 'units'
+    parts = [f'{n} {unit_word} available at {addr}']
+    if min_p and max_p and min_p != max_p:
+        parts.append(f'— prices from ${int(min_p):,} to ${int(max_p):,}/mo')
+    elif min_p:
+        parts.append(f'— ${int(min_p):,}/mo')
+    if max_pct and max_pct > 0:
+        parts.append(f'. Best deal: {max_pct:g}% under market fair value')
+    return ''.join(parts) + '.'
+
+
+@app.route('/d/<path:listing_id>')
+def page_share_deal(listing_id: str):
+    """MC-340: Public shareable page for a single deal.
+
+    Returns a fully-rendered HTML page (server-side) with OpenGraph + Twitter
+    Card meta tags so the URL previews cleanly when dropped into Slack, Twitter,
+    iMessage, Discord, etc. Renders an in-app 404 (with full-page friendly
+    message + nav back to /) when the listing_id isn't in the current deal
+    set — never returns a bare 404 to a visitor.
+    """
+    if not listing_id:
+        return render_template('deal.html', not_found=True, not_found_reason='Missing listing id.'), 400
+
+    deals = load_deals()
+    deal = next((x for x in deals if x.get('listing_id') == listing_id), None)
+    if deal is None:
+        # Unknown id → render the same template with a friendly message.
+        # 404 status code still returned so crawlers handle it correctly.
+        return render_template(
+            'deal.html',
+            not_found=True,
+            not_found_reason=(
+                f'No active listing matches id “{listing_id}”. '
+                'It may have been rented, delisted, or replaced by a fresher deal.'
+            ),
+        ), 404
+
+    # Deal is present — build the page context.
+    image_url = deal.get('image_url') or ''
+    if not image_url and isinstance(deal.get('image_urls'), list):
+        for cand in deal['image_urls']:
+            if isinstance(cand, str) and cand.startswith('http'):
+                image_url = cand
+                break
+    image_alt = _safe_og_text(deal.get('title') or deal.get('neighbourhood') or 'Toronto rental photo', limit=120)
+
+    og_title = _safe_og_text(
+        (deal.get('title') or f"{deal.get('price_fmt','')} {deal.get('beds','')}BR in {deal.get('neighbourhood','Toronto')}").strip(),
+        limit=90,
+    )
+    og_description = _safe_og_text(_share_og_description(deal), limit=200)
+
+    base_url = request.host_url.rstrip('/')
+    og_url = f"{base_url}/d/{listing_id}"
+
+    beds = deal.get('beds')
+    beds_display = 'Studio' if beds == 0 else (str(int(beds)) if beds is not None else '—')
+    baths = deal.get('baths')
+    baths_display = (f'{baths:g}' if baths is not None else '—')
+    sqft = deal.get('sqft')
+    sqft_display = f"{int(sqft):,}" if (sqft is not None and float(sqft) > 0) else '—'
+    days_ago = deal.get('days_ago')
+    if days_ago is None:
+        days_ago_display = 'unknown'
+    elif days_ago == 0:
+        days_ago_display = 'today'
+    elif days_ago == 1:
+        days_ago_display = '1 day ago'
+    else:
+        days_ago_display = f'{int(days_ago)} days ago'
+
+    src = (deal.get('source') or '').lower()
+    source_display = {'kijiji': 'Kijiji', 'craigslist': 'Craigslist'}.get(src, src or '—')
+
+    # Honest title for the page <title> and the visible title-line under the price
+    title_line = _safe_og_text(
+        deal.get('title') or f"{deal.get('beds','')}BR in {deal.get('neighbourhood','Toronto')}".strip(),
+        limit=160,
+    )
+
+    score = deal.get('final_score') or 0
+    deal_score_fmt = f"{float(score):.2f}" if score else ''
+
+    ctx = {
+        'not_found': False,
+        'listing': deal,
+        'title': _safe_og_text(og_title, limit=90),
+        'og_title': og_title,
+        'og_description': og_description,
+        'og_image': image_url,
+        'og_image_alt': image_alt,
+        'og_url': og_url,
+        'image_url': image_url,
+        'image_alt': image_alt,
+        'price_fmt': deal.get('price_fmt') or (f"${int(deal.get('price', 0)):,}" if deal.get('price') else '—'),
+        'pct_under': deal.get('pct_under') or 0,
+        'pct_under_fmt': deal.get('pct_under_fmt') or '0%',
+        'fair_value_fmt': deal.get('fair_value_fmt') or '—',
+        'title_line': title_line,
+        'neighbourhood': deal.get('neighbourhood') or '—',
+        'beds_display': beds_display,
+        'baths_display': baths_display,
+        'sqft_display': sqft_display,
+        'days_ago_display': days_ago_display,
+        'source_display': source_display,
+        'deal_score': bool(score),
+        'deal_score_fmt': deal_score_fmt,
+        'cautions': [c for c in (deal.get('cautions') or []) if c],
+    }
+    return render_template('deal.html', **ctx), 200
+
+
+# ── MC-341: Street-level building group page + JSON endpoint ────────────────
+
+
+@app.route('/api/buildings/<slug>/deals')
+def api_building_deals(slug: str):
+    """MC-341: JSON endpoint for one building group.
+
+    Returns the building metadata + the full list of unit deals, sorted by
+    price ascending. Each unit is a normalized deal dict (same shape as
+    /api/deals rows) with an added 'unit_hint' field for display.
+
+    404 when no building matches the slug (no listings on that street, OR the
+    street has fewer than 2 active listings — the page only makes sense for
+    multi-unit buildings).
+    """
+    if not slug:
+        return jsonify({'error': 'missing slug'}), 400
+    deals = load_deals()
+    group = _find_building(deals, slug)
+    if not group:
+        return jsonify({'error': 'building not found', 'slug': slug}), 404
+    return jsonify(group)
+
+
+@app.route('/b/<slug>')
+def page_building(slug: str):
+    """MC-341: Public shareable page for one street-level building group.
+
+    Renders a fully-server-rendered HTML page (independent of the main index
+    bundle) with OpenGraph + Twitter Card meta tags so the URL unfurls cleanly
+    on Slack/Twitter/Discord/iMessage. Always returns 200 — even unknown slugs
+    get a friendly "Building not found" page so visitors never see a bare wall.
+    """
+    if not slug:
+        return render_template('building.html', not_found=True,
+                              not_found_reason='Missing building slug.'), 400
+
+    deals = load_deals()
+    group = _find_building(deals, slug)
+
+    if group is None:
+        return render_template(
+            'building.html',
+            not_found=True,
+            not_found_reason=(
+                f'No multi-unit building matches "{slug}". '
+                'The street may have fewer than 2 active listings right now.'
+            ),
+        ), 404
+
+    # Build OG meta tag values
+    address = group.get('address') or ''
+    n_units = group.get('unit_count') or 0
+    og_title = _safe_og_text(f'{address} — {n_units} units', limit=90)
+    og_description = _safe_og_text(_building_og_description(group), limit=200)
+
+    base_url = request.host_url.rstrip('/')
+    og_url = f"{base_url}/b/{slug}"
+
+    # Pick the best unit's image as the OG image (first unit with image_url)
+    og_image = ''
+    og_image_alt = ''
+    for u in group.get('units', []):
+        img = u.get('image_url') or ''
+        if not img and isinstance(u.get('image_urls'), list):
+            for cand in u['image_urls']:
+                if isinstance(cand, str) and cand.startswith('http'):
+                    img = cand
+                    break
+        if img:
+            og_image = img
+            og_image_alt = _safe_og_text(
+                f"{address} rental photo" + (f" - {u.get('unit_hint')}" if u.get('unit_hint') else ''),
+                limit=120,
+            )
+            break
+
+    # Price range display
+    min_p = group.get('min_price') or 0
+    max_p = group.get('max_price') or 0
+    if min_p == max_p or not max_p:
+        price_range = f"${int(min_p):,}/mo" if min_p else '—'
+    else:
+        price_range = f"${int(min_p):,}–${int(max_p):,}/mo"
+    median_price = group.get('median_price') or 0
+
+    ctx = {
+        'not_found': False,
+        'building': group,
+        'address': address,
+        'units': group.get('units', []),
+        'unit_count': n_units,
+        'price_range': price_range,
+        'median_price_fmt': f"${int(median_price):,}" if median_price else '—',
+        'min_price_fmt': f"${int(min_p):,}" if min_p else '—',
+        'max_price_fmt': f"${int(max_p):,}" if max_p else '—',
+        'min_pct_under': group.get('min_pct_under') or 0,
+        'max_pct_under': group.get('max_pct_under') or 0,
+        'max_pct_under_fmt': f"{(group.get('max_pct_under') or 0):g}%",
+        'neighbourhood': group.get('neighbourhood') or 'Toronto',
+        'region': group.get('region') or '',
+        'has_deals': bool(group.get('has_deals')),
+        # OG / Twitter
+        'title': _safe_og_text(f'{address} — Toronto Rent Deals', limit=90),
+        'og_title': og_title,
+        'og_description': og_description,
+        'og_image': og_image,
+        'og_image_alt': og_image_alt,
+        'og_url': og_url,
+    }
+    return render_template('building.html', **ctx), 200
 
 
 # ── MC-257: Commute Time Helpers ────────────────────────────────────────────

@@ -334,6 +334,16 @@
     <span id="health_text" style="font-weight:600;">Checking data freshness…</span>
     <span id="health_meta" style="color:#6b7280; font-size:0.78rem; border-left:1px solid #e5e7eb; padding-left:10px;"></span>
   </div>
+  <!-- MC-339: "X new today" pill. Sits below the freshness pill. Hidden
+       when /api/meta returns new_today == 0 so the layout doesn't shift
+       unnecessarily. Click enables the existing Only NEW filter and
+       reloads deals; provides immediate feedback to returning users
+       about what's been added since their last visit. -->
+  <div id="new_today_pill" data-momentum="hidden" style="display:none; align-items:center; gap:8px; background:white; border:1px solid #e5e7eb; border-radius:999px; padding:8px 16px; margin-bottom:14px; font-size:0.85rem; color:#374151; box-shadow:0 1px 2px rgba(0,0,0,0.04); cursor:pointer; width:fit-content;" title="Click to show only deals first seen in the last 24 hours" onclick="window.__mc339EnableOnlyNew();">
+    <span id="new_today_icon" style="font-size:1rem;">🔥</span>
+    <span id="new_today_text" style="font-weight:600;">0 new today</span>
+    <span id="new_today_hint" style="color:#6b7280; font-size:0.78rem; border-left:1px solid #e5e7eb; padding-left:10px;">click to filter</span>
+  </div>
   <style>
     /* MC-335: freshness pill color states */
     #health_pill[data-freshness="fresh"]   #health_dot { background:#16a34a; box-shadow:0 0 0 4px rgba(22,163,74,0.15); }
@@ -341,6 +351,13 @@
     #health_pill[data-freshness="stale"]   #health_dot { background:#dc2626; box-shadow:0 0 0 4px rgba(220,38,38,0.15); }
     #health_pill[data-freshness="unknown"] #health_dot { background:#9ca3af; box-shadow:0 0 0 4px rgba(156,163,175,0.15); }
     #health_pill:hover { border-color:#2d6a4f; }
+    /* MC-339: momentum variants. green when 3+ new (signals freshness push),
+       slate-grey when 1-2 (low-key signal so it doesn't feel alarmist).
+       Hover lifts the border like the health pill for visual consistency. */
+    #new_today_pill[data-momentum="high"]    { border-color:#86c7a4; background:#f0f9f4; color:#1e5b3a; }
+    #new_today_pill[data-momentum="low"]     { border-color:#d1d5db; background:#f9fafb; color:#374151; }
+    #new_today_pill[data-momentum="hidden"]  { display:none !important; }
+    #new_today_pill:hover                    { border-color:#2d6a4f; }
   </style>
 
   <!-- MC-265: How It Works + Stats -->
@@ -423,6 +440,13 @@
     <div class="filter-group">
       <label for="max_price_per_sqft">Max $/sqft</label>
       <input id="max_price_per_sqft" type="number" placeholder="e.g. 4" min="0" step="0.5" style="width:80px;" title="Maximum price per square foot (e.g. 4 = $4.00/sqft cap)">
+    </div>
+
+    <!-- MC-343: Minimum % under market filter. Lets users focus on the
+         genuinely-underpriced listings without scrolling through everything. -->
+    <div class="filter-group">
+      <label for="min_pct_under">Min % Under Market</label>
+      <input id="min_pct_under" type="number" placeholder="e.g. 15" min="0" max="100" step="1" style="width:70px;" title="Only show listings priced at least this % below neighborhood fair value (e.g. 15 = 15% or more under market)">
     </div>
 
     <!-- Parking -->
@@ -872,6 +896,9 @@ function parseQueryParams() {
   // MC-327: round-trip max_price_per_sqft from URL into the input so
   // refresh + share-link flows keep the cap active.
   if (params.get('price_per_sqft_max')) document.getElementById('max_price_per_sqft').value = params.get('price_per_sqft_max');
+  // MC-343: round-trip min_pct_under so refresh + share-link flows keep
+  // the threshold active.
+  if (params.get('min_pct_under')) document.getElementById('min_pct_under').value = params.get('min_pct_under');
   if (params.get('commute_dest')) document.getElementById('commute_dest').value = params.get('commute_dest');
   if (params.get('max_commute')) document.getElementById('max_commute').value = params.get('max_commute');
   if (params.get('max_subway')) document.getElementById('max_subway').value = params.get('max_subway');
@@ -918,6 +945,8 @@ function applySavedFilters(filters) {
   setIfPresent('max_subway', filters.max_subway);
   // MC-327: round-trip the $/sqft cap when Load filters from saved search.
   setIfPresent('max_price_per_sqft', filters.price_per_sqft_max);
+  // MC-343: round-trip min_pct_under when Load filters from saved search.
+  setIfPresent('min_pct_under', filters.min_pct_under);
   if (filters.has_parking === 'true' || filters.has_parking === true) {
     document.getElementById('has_parking').checked = true;
     document.getElementById('parking_toggle').classList.add('active');
@@ -994,6 +1023,8 @@ function describeFilters(filters) {
   if (filters.max_subway) parts.push(`Subway ≤ ${filters.max_subway}m`);
   // MC-327: surface the Max $/sqft filter in the save-search summary.
   if (filters.price_per_sqft_max) parts.push(`≤ $${filters.price_per_sqft_max}/sqft`);
+  // MC-343: surface the Min % under market filter in the save-search summary.
+  if (filters.min_pct_under) parts.push(`≥ ${filters.min_pct_under}% under`);
   return parts.length ? parts.join(' · ') : 'No filters set - saving as "all listings".';
 }
 
@@ -1133,6 +1164,12 @@ function buildParams() {
   const maxPricePerSqft = document.getElementById('max_price_per_sqft').value;
   if (maxPricePerSqft) params.set('price_per_sqft_max', maxPricePerSqft);
 
+  // MC-343: Min % under market threshold. Round-trips through parseQueryParams
+  // / applySavedFilters / getCurrentFilterStateAsObject so save-search + URL
+  // share-link flows all stay symmetric.
+  const minPctUnder = document.getElementById('min_pct_under').value;
+  if (minPctUnder) params.set('min_pct_under', minPctUnder);
+
   return params;
 }
 
@@ -1156,6 +1193,8 @@ function updateFilterCount() {
   if (document.getElementById('price_dropped').checked) count++;
   // MC-327: Max $/sqft cap counts as one active filter when set.
   if (document.getElementById('max_price_per_sqft').value) count++;
+  // MC-343: Min % under market threshold counts as one active filter when set.
+  if (document.getElementById('min_pct_under').value) count++;
   // MC-332: With photos only toggle counts as one active filter when checked.
   if (document.getElementById('has_image').checked) count++;
   const badge = document.getElementById('filter_count');
@@ -1218,6 +1257,8 @@ function resetFilters() {
   document.getElementById('max_subway').value = '';
   // MC-327: clear Max $/sqft cap alongside the other filters.
   document.getElementById('max_price_per_sqft').value = '';
+  // MC-343: clear Min % under market threshold alongside the other filters.
+  document.getElementById('min_pct_under').value = '';
   commuteTimesCache = {};
   loadDeals();
   history.replaceState({}, '', window.location.pathname);
@@ -1723,7 +1764,7 @@ document.getElementById('has_image').addEventListener('change', function() {
 });
 
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped', 'has_image'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'min_pct_under', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped', 'has_image'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
@@ -1737,6 +1778,7 @@ loadNewCountBadge();     // MC-323: populate the "(N new)" hint next to the Only
 loadPriceDropCountBadge();  // MC-325: populate the "(N drops)" hint next to the Price Drop toggle
 loadHasImageCountBadge();  // MC-332: populate the "(N photos)" hint next to the With photos only toggle
 loadHealthPill();        // MC-335: live data-freshness pill in header
+loadNewTodayPill();      // MC-339: "X new today" pill in header (24h window)
 loadDeals();
 
 // ── MC-335: Live data-freshness pill ─────────────────────────────────────────
@@ -1809,6 +1851,61 @@ async function loadNewCountBadge() {
   } catch(e) {
     el.textContent = '-';
   }
+}
+
+// MC-339: Fetch /api/meta.new_today and render the "🔥 N new today" pill
+// in the header. Suppresses the pill entirely when N == 0 (data-momentum="hidden"
+// via CSS) so the page doesn't grow a noisy banner on quiet days. The pill
+// is a one-click affordance into the existing Only NEW filter, so returning
+// users land on a useful screen rather than a confusing empty table.
+async function loadNewTodayPill() {
+  const pill = document.getElementById('new_today_pill');
+  if (!pill) return;
+  try {
+    const resp = await fetch('/api/meta');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const n = (data && typeof data.new_today === 'number') ? data.new_today : 0;
+    if (n <= 0) {
+      pill.setAttribute('data-momentum', 'hidden');
+      return;
+    }
+    const txt = document.getElementById('new_today_text');
+    if (txt) txt.textContent = n + ' new today';
+    pill.setAttribute('data-momentum', n >= 3 ? 'high' : 'low');
+  } catch(e) {
+    pill.setAttribute('data-momentum', 'hidden');
+  }
+}
+
+// MC-339: Click handler for the new_today pill — enables the Only NEW
+// filter checkbox, syncs the toggle's `active` class (since programmatic
+// .checked = true doesn't fire a change event), triggers a re-fetch of
+// /api/deals, scrolls to the top of the deals table, and surfaces a
+// 1.2s "Filtered to new" ack so users see their click land. Exposed on
+// window so the inline onclick="" in the markup can reach it without
+// polluting global event-dispatch surfaces.
+window.__mc339EnableOnlyNew = function() {
+  const cb = document.getElementById('only_new');
+  const toggle = document.getElementById('only_new_toggle');
+  let stateChanged = false;
+  if (cb && !cb.checked) {
+    cb.checked = true;
+    if (toggle) toggle.classList.add('active');
+    stateChanged = true;
+  }
+  updateFilterCount && updateFilterCount();
+  if (stateChanged && typeof loadDeals === 'function') {
+    loadDeals();
+  }
+  const txt = document.getElementById('new_today_text');
+  const orig = txt ? txt.textContent : '';
+  if (txt) txt.textContent = 'Filtered to new';
+  setTimeout(function() {
+    if (txt && orig) txt.textContent = orig;
+  }, 1200);
+  window.scrollTo({top: 0, behavior: 'smooth'});
+};
 }
 
 // MC-325: Fetch /api/meta.price_drop_count and render "(N drops)" next to the
