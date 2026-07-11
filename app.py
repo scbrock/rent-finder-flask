@@ -5,6 +5,8 @@ MC-267/268/270: POI proximity - grocery, gym, TTC via Overpass + ORS.
 """
 
 import os, sys, json, time, hashlib, math, re
+import subprocess
+import threading
 from flask import Flask, render_template, jsonify, request
 from neighbourhood_lookup import resolve_neighbourhood
 
@@ -1080,6 +1082,163 @@ def _compute_health_snapshot_from_csv(snapshot: dict) -> dict:
 def api_health():
     """MC-335: live data-freshness snapshot for the header pill."""
     return jsonify(_compute_health_snapshot())
+
+
+# ── MC-345: Force-refresh button (manual scrape trigger) ────────────────
+#
+# The Kijiji + Craigslist scrapers already have hard per-IP rate limits on
+# their end, so a runaway loop here could get the deployment's IP banned
+# from those sources. Per AC5: cap manual triggers at 1 per 5 minutes per
+# IP. We use a simple in-process dict (Render's single-worker deployment
+# means no cross-process state to sync). For multi-worker deployments,
+# swap to a SQLite-backed rate limit -- the persist schema is already
+# in place via the scrape_run_history table's `ip` column for forensics.
+_force_refresh_state = {
+    "ip_last_run": {},   # ip -> datetime
+    "lock": threading.Lock(),
+}
+FORCE_REFRESH_COOLDOWN_S = 300   # 5 min per AC5
+
+
+def _parse_run_output(stdout: str) -> tuple:
+    """Extract listings_collected + deals_count from find_deals.py stdout.
+
+    We accept BOTH the cron-handoff line format ("Listings collected: 376
+    active | Deals found: 152") and the script's own print line format
+    ("Total listings: 376"). Whichever number appears first in the stdout
+    wins. We tolerate leading emoji / bullets via a leading-strip step.
+    """
+    listings_collected = None
+    deals_count = None
+    for line in (stdout or "").splitlines():
+        # Strip leading non-alphanumerics (emojis, bullets) so the regex
+        # is robust to whatever the print() statement happens to wrap in.
+        clean = re.sub(r'^[^A-Za-z0-9]+', '', line.strip())
+        m = re.match(r'(?:Listings collected|Total listings):\s*([\d,]+)',
+                     clean)
+        if m and listings_collected is None:
+            try:
+                listings_collected = int(m.group(1).replace(',', ''))
+            except ValueError:
+                pass
+        m = re.match(r'Deals found:\s*([\d,]+)', clean)
+        if m and deals_count is None:
+            try:
+                deals_count = int(m.group(1).replace(',', ''))
+            except ValueError:
+                pass
+    return listings_collected, deals_count
+
+
+def _run_scrape_in_background(run_id: int, started_iso: str, app_dir: str) -> None:
+    """Worker thread target: spawn `python find_deals.py` and update the
+    run row when done. Captures stdout for stats + stderr tail for
+    the Recent runs table. We use a fresh subprocess (NOT a thread-shared
+    connection) so the scrape can run for several minutes without blocking
+    the Flask request loop.
+    """
+    from persist import (
+        finish_scrape_run_history_row, _get_conn, _reset_conn,
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, 'find_deals.py'],
+            cwd=app_dir,
+            capture_output=True, text=True, timeout=600,
+        )
+        finished_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        listings_collected, deals_count = _parse_run_output(proc.stdout or '')
+        finish_scrape_run_history_row(
+            run_id=run_id,
+            finished_at=finished_iso,
+            exit_code=int(proc.returncode),
+            listings_collected=listings_collected,
+            deals_count=deals_count,
+            stderr_tail=(proc.stderr or '')[-2000:],
+        )
+    except subprocess.TimeoutExpired:
+        finished_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        finish_scrape_run_history_row(
+            run_id=run_id, finished_at=finished_iso, exit_code=-1,
+            stderr_tail='TIMEOUT (10 min cap reached)',
+        )
+    except Exception as e:
+        finished_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        finish_scrape_run_history_row(
+            run_id=run_id, finished_at=finished_iso, exit_code=-2,
+            stderr_tail=f'{type(e).__name__}: {e}',
+        )
+    finally:
+        # Release cached persist connection so the next request sees
+        # the freshly-updated run row.
+        try:
+            _reset_conn()
+        except Exception:
+            pass
+
+
+@app.route('/api/scrape/run', methods=['POST'])
+def api_scrape_run():
+    """MC-345 AC1: spawn a find_deals.py subprocess in the background
+    and return 202 with run_id. Rate-limited to 1 per 5 min per IP."""
+    from persist import create_scrape_run_history_row
+    ip = request.remote_addr or 'unknown'
+    now = datetime.now(timezone.utc)
+    with _force_refresh_state['lock']:
+        last = _force_refresh_state['ip_last_run'].get(ip)
+        if last is not None:
+            elapsed = (now - last).total_seconds()
+            if elapsed < FORCE_REFRESH_COOLDOWN_S:
+                retry = int(FORCE_REFRESH_COOLDOWN_S - elapsed)
+                return jsonify({
+                    'error': 'rate_limited',
+                    'retry_after_seconds': retry,
+                    'message': f'Please wait {retry}s before triggering another refresh.',
+                }), 429
+        _force_refresh_state['ip_last_run'][ip] = now
+
+    started_iso = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    run_id = create_scrape_run_history_row(
+        started_at=started_iso, trigger='force_refresh', ip=ip,
+    )
+
+    # Spawn the scrape in a daemon thread so the POST returns 202 immediately
+    # and the UI can poll /api/scrape/run/<id> for completion.
+    thread = threading.Thread(
+        target=_run_scrape_in_background,
+        args=(run_id, started_iso, APP_DIR),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({
+        'run_id': run_id,
+        'started_at': started_iso,
+        'status': 'running',
+    }), 202
+
+
+@app.route('/api/scrape/runs')
+def api_scrape_runs():
+    """MC-345 AC2: list the most recent N force-refresh runs for the
+    Recent runs table (default 10). Newest first."""
+    from persist import list_scrape_run_history
+    try:
+        limit = int(request.args.get('limit', 10))
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 50))
+    return jsonify({'runs': list_scrape_run_history(limit=limit)})
+
+
+@app.route('/api/scrape/run/<int:run_id>')
+def api_scrape_run_status(run_id: int):
+    """MC-345 AC1: poll a single run by id for completion."""
+    from persist import get_scrape_run_history_row
+    row = get_scrape_run_history_row(run_id)
+    if not row:
+        return jsonify({'error': 'not_found', 'run_id': run_id}), 404
+    return jsonify(row)
 
 
 @app.route('/')

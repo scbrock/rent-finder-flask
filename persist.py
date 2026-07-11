@@ -220,6 +220,24 @@ CREATE TABLE IF NOT EXISTS craigslist_photo_cache (
     fetched_at   INTEGER NOT NULL,         -- unix epoch seconds
     is_negative  INTEGER NOT NULL DEFAULT 0 -- 1 if negative cache (error/404/no image)
 );
+
+-- MC-345: Force-refresh run history. One row per /api/scrape/run invocation.
+-- Captures lifecycle (started_at -> finished_at), exit_code, listings_collected,
+-- deals_count, stderr_tail for the Recent runs table the UI polls. The per-source
+-- scrape_runs table above is internal to find_deals.py; this one is for the
+-- manual trigger UI.
+CREATE TABLE IF NOT EXISTS scrape_run_history (
+    run_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    finished_at         TEXT,
+    trigger             TEXT    NOT NULL DEFAULT 'force_refresh',  -- 'force_refresh' | 'scheduled'
+    ip                  TEXT,                                     -- client IP for rate-limit forensics
+    exit_code           INTEGER,                                  -- 0 ok, -1 timeout, -2 exception
+    listings_collected  INTEGER,
+    deals_count         INTEGER,
+    stderr_tail         TEXT                                      -- last ~2kB of stderr for debugging
+);
+CREATE INDEX IF NOT EXISTS idx_scrape_run_history_started ON scrape_run_history(started_at DESC);
 """
 
 
@@ -334,9 +352,22 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
     try:
         new_count = 0
         upsert_count = 0
+        # MC-342: per-source new listings counter. Computed during the upsert
+        # loop (BEFORE the row is inserted) so scrape_runs.listings_new
+        # actually reflects new rows. The previous implementation recomputed
+        # the count after insertion (SELECT after upsert), which always
+        # returned 0 because the row was already in the table.
+        new_per_source: dict = {}
 
         for row in rows:
-            listing_id = row.get("listing_id") or row.get("link", "")
+            # MC-342: fall back to 'url' as well — find_deals renames the
+            # DataFrame's 'link' column to 'url' before to_dict('records'),
+            # so callers might pass rows where the URL lives under 'url'.
+            listing_id = (
+                row.get("listing_id")
+                or row.get("url", "")
+                or row.get("link", "")
+            )
             if not listing_id:
                 continue
             seen_ids.add(listing_id)
@@ -347,9 +378,27 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
             pct_under = None
             if scored_df is not None:
                 import pandas as _pd
-                link_col = row.get("link", "")
+                # MC-342: find_deals.py renames the DataFrame's `link` column
+                # to `url` BEFORE calling to_dict('records') (so scored_rows
+                # carries the URL under the key `url`, not `link`). The
+                # previous merge read `row.get("link", "")` which returned
+                # an empty string for every row in the modern call shape,
+                # so the look-up against the scored DataFrame never matched
+                # and fair_value / score / pct_under were silently dropped
+                # (set to NULL on the upsert). That produced a DB with zero
+                # scored rows even though the pipeline was healthy, which
+                # surfaced as /api/health.deal_count = 0 + /api/deals showing
+                # fair_value = 0 everywhere.
+                link_col = (
+                    row.get("url", "")
+                    or row.get("link", "")
+                    or listing_id
+                )
                 try:
-                    matches = scored_df[scored_df["link"] == link_col]
+                    matches = scored_df[
+                        (scored_df["link"] == link_col)
+                        | (scored_df.get("url", scored_df["link"]) == link_col)
+                    ]
                     if not matches.empty:
                         sr = matches.iloc[0]
                         fair_value = float(sr["fair_value"]) if "fair_value" in sr and _pd.notna(sr["fair_value"]) else None
@@ -420,6 +469,8 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
             upsert_count += 1
             if is_new:
                 new_count += 1
+                src = row.get("source", "unknown")
+                new_per_source[src] = new_per_source.get(src, 0) + 1
 
             # MC-325: Record a price point for this listing so future scrapes
             # can detect price drops (current vs oldest in window). Uses the
@@ -458,11 +509,11 @@ def upsert_listings(rows: list[dict], scored_df=None, source_errors: dict = None
         seen_ids_list = list(seen_ids)
         for src in sorted(run_sources):
             src_rows = [r for r in rows if r.get("source") == src]
-            src_new = sum(
-                1 for r in src_rows
-                if r.get("listing_id") and
-                conn.execute("SELECT 1 FROM listings WHERE listing_id = ?", (r["listing_id"],)).fetchone() is None
-            )
+            # MC-342: use the per-source counter populated during the upsert
+            # loop (BEFORE each row was inserted). The previous implementation
+            # recomputed this AFTER insertion via SELECT, which always
+            # returned 0 because the listing was already in the table.
+            src_new = new_per_source.get(src, 0)
             conn.execute("""
                 INSERT INTO scrape_runs (source, listings_seen, listings_new, listings_inactive, errors, duration_secs)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -1917,6 +1968,95 @@ def reset_craigslist_photo_cache():
     try:
         conn.execute('DELETE FROM craigslist_photo_cache')
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ── MC-345: Force-refresh run history ─────────────────────────────────
+#
+# Schema lives in SCHEMA at the top of this module. Helpers below expose
+# a small CRUD surface so app.py can record + poll force-refresh runs.
+# All timestamps are UTC ISO-8601 strings (matches the rest of persist).
+#
+
+
+def create_scrape_run_history_row(
+    started_at: str,
+    trigger: str = "force_refresh",
+    ip: str = None,
+) -> int:
+    """Insert a new run row with `started_at` (defaults to now via SCHEMA
+    if not provided). Returns the new run_id."""
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """INSERT INTO scrape_run_history (started_at, trigger, ip)
+               VALUES (?, ?, ?)""",
+            (started_at, trigger, ip),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def finish_scrape_run_history_row(
+    run_id: int,
+    finished_at: str,
+    exit_code: int,
+    listings_collected: int = None,
+    deals_count: int = None,
+    stderr_tail: str = None,
+) -> None:
+    """Mark a run as finished. Captures exit_code, output stats, and a
+    tail of stderr for the Recent runs UI."""
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """UPDATE scrape_run_history
+               SET finished_at = ?, exit_code = ?,
+                   listings_collected = ?, deals_count = ?,
+                   stderr_tail = ?
+               WHERE run_id = ?""",
+            (finished_at, exit_code, listings_collected, deals_count,
+             (stderr_tail or "")[-2000:], run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_scrape_run_history_row(run_id: int) -> Optional[dict]:
+    """Return one run row by id, or None if not found. Columns are the
+    raw SQL column names; callers can re-key (e.g. drop the run_id, format
+    timestamps) at the API layer."""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM scrape_run_history WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in conn.execute("SELECT * FROM scrape_run_history LIMIT 0").description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def list_scrape_run_history(limit: int = 10) -> list[dict]:
+    """Return the most recent N runs (newest first by started_at)."""
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM scrape_run_history ORDER BY started_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        cols = [d[0] for d in conn.execute("SELECT * FROM scrape_run_history LIMIT 0").description]
+        return [dict(zip(cols, r)) for r in rows]
     finally:
         conn.close()
 

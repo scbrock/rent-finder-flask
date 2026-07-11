@@ -333,6 +333,17 @@
     <span id="health_dot" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#9ca3af; flex-shrink:0;"></span>
     <span id="health_text" style="font-weight:600;">Checking data freshness…</span>
     <span id="health_meta" style="color:#6b7280; font-size:0.78rem; border-left:1px solid #e5e7eb; padding-left:10px;"></span>
+    <!-- MC-345: Force-refresh button. Sits inside the pill so the layout flows
+         naturally on mobile. Disabled while a run is in flight; re-enabled
+         on completion. The 5-min server-side rate limit is enforced via the
+         /api/scrape/run endpoint (returns 429 with retry_after_seconds if
+         triggered too soon). -->
+    <button id="force_refresh_btn" type="button"
+            style="margin-left:6px; background:#f3f4f6; border:1px solid #d1d5db; border-radius:6px; padding:3px 10px; font-size:0.78rem; font-weight:600; color:#374151; cursor:pointer;"
+            title="Trigger a manual scrape now (server-side rate limit: 1 per 5 min)"
+            onclick="triggerForceRefresh()">
+      Refresh
+    </button>
   </div>
   <!-- MC-339: "X new today" pill. Sits below the freshness pill. Hidden
        when /api/meta returns new_today == 0 so the layout doesn't shift
@@ -1834,6 +1845,134 @@ async function loadHealthPill() {
   // Refresh every 60s — matches the keepalive cadence used elsewhere
   if (healthRefreshTimer) clearInterval(healthRefreshTimer);
   healthRefreshTimer = setInterval(loadHealthPill, 60000);
+}
+
+// MC-345: Force-refresh handler. POSTs to /api/scrape/run, disables the
+// button for the duration of the run, polls /api/scrape/run/<id> every
+// 2s for completion. On success: re-enables + reloads the freshness pill
+// (via existing loadHealthPill) + shows a small toast with the new deal
+// count. On failure: surfaces a red error chip with the latest stderr_tail.
+let _forceRefreshPoller = null;
+async function triggerForceRefresh() {
+  const btn = document.getElementById('force_refresh_btn');
+  const pill = document.getElementById('health_pill');
+  const txt = document.getElementById('health_text');
+  const dot = document.getElementById('health_dot');
+  if (!btn) return;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Refreshing...';
+  if (pill) pill.setAttribute('data-freshness', 'refreshing');
+  if (dot) dot.style.background = '#9ca3af';
+  if (txt) txt.textContent = 'Refreshing... scraper running';
+  _dismissForceRefreshToast();
+  let resp;
+  try {
+    resp = await fetch('/api/scrape/run', { method: 'POST', cache: 'no-store' });
+  } catch (err) {
+    _finishForceRefresh(btn, originalLabel, 'error', 'Network error: ' + err);
+    return;
+  }
+  if (resp.status === 429) {
+    // Server-side rate limit hit.
+    let body = null;
+    try { body = await resp.json(); } catch (_) {}
+    const retry = (body && body.retry_after_seconds) ? body.retry_after_seconds : 300;
+    _showForceRefreshToast(
+      'error',
+      `Rate limited — try again in ~${Math.ceil(retry / 60)} min.`
+    );
+    _finishForceRefresh(btn, originalLabel, 'unknown', null);
+    return;
+  }
+  if (!resp.ok) {
+    _finishForceRefresh(btn, originalLabel, 'error',
+      `Server returned HTTP ${resp.status}.`);
+    return;
+  }
+  let data = null;
+  try { data = await resp.json(); } catch (_) {}
+  const runId = data && data.run_id;
+  if (!runId) {
+    _finishForceRefresh(btn, originalLabel, 'error', 'No run_id in response.');
+    return;
+  }
+  // Poll for completion. 2s interval, 5-min cap.
+  let elapsed = 0;
+  if (_forceRefreshPoller) clearInterval(_forceRefreshPoller);
+  _forceRefreshPoller = setInterval(async () => {
+    elapsed += 2000;
+    let pollResp, pollData;
+    try {
+      pollResp = await fetch(`/api/scrape/run/${runId}`, { cache: 'no-store' });
+      pollData = await pollResp.json();
+    } catch (err) {
+      if (elapsed >= 5 * 60 * 1000) {
+        clearInterval(_forceRefreshPoller);
+        _finishForceRefresh(btn, originalLabel, 'error', 'Polling timed out.');
+      }
+      return;
+    }
+    if (pollData && pollData.finished_at) {
+      clearInterval(_forceRefreshPoller);
+      const exitCode = pollData.exit_code;
+      const deals = pollData.deals_count;
+      if (exitCode === 0) {
+        const msg = (deals != null)
+          ? `Refresh complete — ${deals} deals found.`
+          : 'Refresh complete.';
+        _showForceRefreshToast('success', msg);
+        _finishForceRefresh(btn, originalLabel, 'fresh', null);
+        // Reload the freshness pill so the dot/text reflect the new
+        // minutes_since_scrape + active/deal counts from the just-finished run.
+        loadHealthPill();
+        // Also reload the deals table so the user sees the new listings
+        // without having to manually click Refresh.
+        loadDeals();
+      } else {
+        const tail = (pollData.stderr_tail || '').slice(-200);
+        _showForceRefreshToast('error',
+          `Scrape failed (exit ${exitCode}): ${tail || 'no stderr'}`);
+        _finishForceRefresh(btn, originalLabel, 'error', null);
+      }
+    } else if (elapsed >= 5 * 60 * 1000) {
+      clearInterval(_forceRefreshPoller);
+      _finishForceRefresh(btn, originalLabel, 'stale', 'Run still pending after 5 min.');
+    }
+  }, 2000);
+}
+
+function _finishForceRefresh(btn, originalLabel, freshnessState, _) {
+  btn.disabled = false;
+  btn.textContent = originalLabel;
+  const pill = document.getElementById('health_pill');
+  if (pill && freshnessState) {
+    pill.setAttribute('data-freshness', freshnessState);
+  }
+}
+
+function _showForceRefreshToast(kind, message) {
+  _dismissForceRefreshToast();
+  const el = document.createElement('div');
+  el.id = 'force_refresh_toast';
+  el.setAttribute('data-kind', kind);
+  el.style.cssText = [
+    'position:fixed', 'top:18px', 'right:18px', 'z-index:9999',
+    'padding:10px 14px', 'border-radius:8px', 'font-size:0.85rem',
+    'font-weight:600', 'box-shadow:0 2px 8px rgba(0,0,0,0.18)',
+    'max-width:380px', 'color:white', 'transition:opacity 0.3s',
+    'background:' + (kind === 'success' ? '#2d6a4f' : '#b00020'),
+  ].join(';');
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; }, 5000);
+  setTimeout(() => { el.remove(); }, 5500);
+}
+
+function _dismissForceRefreshToast() {
+  const old = document.getElementById('force_refresh_toast');
+  if (old) old.remove();
 }
 
 // MC-323: Fetch /api/meta.new_count and render "(N new)" next to the Only NEW
