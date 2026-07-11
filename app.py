@@ -72,7 +72,7 @@ def _days_ago_class(days_ago: int) -> str:
 # only rediscovered by our scraper last week will have a low days_ago but
 # a high days_listed - useful for users who care about how long the unit has
 # actually been available, and a stronger signal for "potentially negotiable".
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 def _days_listed_from_first_seen(first_seen_raw, now_utc=None):
     """Compute integer days between first_seen ISO timestamp and now (UTC).
@@ -618,6 +618,11 @@ def _normalize_row(r: dict) -> dict:
             # so the field is always populated for active listings.
             'days_listed': _days_listed_from_first_seen(r.get('first_seen'))
                           if r.get('first_seen') else days_ago,
+            # MC-346: listed_date - YYYY-MM-DD slice of first_seen (durable,
+            # SQLite-backed). Empty string when first_seen is missing so the
+            # CSV column always has a consistent schema. Consumers can JOIN
+            # against /api/deals on listing_id to correlate.
+            'listed_date': (r.get('first_seen') or '')[:10],
             'is_stale': is_stale,
             'is_new': is_new,
             'sqft': r.get('sqft', ''),
@@ -1706,7 +1711,7 @@ def api_export_csv():
         }
     fieldnames = ['neighbourhood', 'region', 'beds', 'baths', 'price', 'price_fmt',
                   'fair_value_fmt', 'pct_under', 'days_ago', 'is_stale', 'cautions',
-                  'commute_minutes', 'link', 'source', 'final_score']  
+                  'commute_minutes', 'link', 'source', 'final_score']
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
     writer.writeheader()
     writer.writerows(deals)
@@ -1714,6 +1719,53 @@ def api_export_csv():
         "Content-Type": "text/csv",
         "Content-Disposition": "attachment; filename=deals.csv",
         "X-Filter-Row-Count": str(len(deals)),
+    }
+
+
+# ── MC-346: Filtered CSV export (/api/deals.csv) ─────────────────────────
+#
+# Per AC1-AC5: same filter params as /api/deals, content-type
+# text/csv, attachment with toronto-deals-YYYY-MM-DD.csv filename, the
+# column schema from the live deals_output.csv (price, beds, baths,
+# neighbourhood, fair_value, pct_under, score, days_ago, sqft, link,
+# source, listed_date, region). The /api/deals/export.csv endpoint above
+# is the original MC-262/MC-338 export with a different schema; both
+# endpoints coexist so the new filter-bar Download button (MC-346 AC6)
+# points at /api/deals.csv while existing power-users keep their
+# export.csv scripts intact.
+@app.route('/api/deals.csv')
+def api_deals_csv():
+    """MC-346: download the current filtered view as CSV.
+
+    - Accepts every filter param that /api/deals accepts
+      (delegated to _parse_deal_filters + _apply_filters).
+    - Emits the column schema from the live deals_output.csv
+      (plus listed_date from first_seen). AC3 column list.
+    - Empty filter result returns 200 with a header-only CSV (AC4).
+    - Filename includes today's date so users get distinct files
+      for distinct downloads on distinct days.
+    - AC5 parity: filtered row count matches /api/deals JSON
+      total for the same filter params (verified in tests).
+    """
+    import csv, io
+    deals = load_deals()
+    parsed = _parse_deal_filters(request.args)
+    deals = _apply_filters(deals, parsed)
+
+    fieldnames = ['price', 'beds', 'baths', 'neighbourhood', 'fair_value',
+                  'pct_under', 'score', 'days_ago', 'sqft', 'link',
+                  'source', 'listed_date', 'region']
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()  # header row always present (AC4)
+    if deals:
+        writer.writerows(deals)
+
+    fname = f'toronto-deals-{date.today().isoformat()}.csv'
+    return output.getvalue(), 200, {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': f'attachment; filename="{fname}"',
+        'X-Filter-Row-Count': str(len(deals)),
     }
 
 

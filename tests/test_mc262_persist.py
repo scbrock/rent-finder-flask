@@ -10,13 +10,36 @@ import persist
 
 @pytest.fixture
 def db_path(tmp_path):
-    """Use a temp DB for each test."""
+    """Use a temp DB for each test.
+
+    MC-347 fix: also call `persist._reset_conn()` in teardown so the
+    module-level cached sqlite connection is closed before pytest's
+    tmp_path cleanup tries to delete the file. On Windows the file
+    delete fails when a connection is still holding the handle,
+    and the next test in a combined run that imports `persist` reuses
+    the (now-dangling) connection to a tmp file -- corrupting state
+    and producing the 42 cross-suite interference failures Tod
+    flagged. Closing the connection in teardown lets tmp_path
+    cleanup complete cleanly and forces the next test to open a
+    fresh connection against its own DB_PATH.
+
+    Scope is function (default) so the reset runs per test, not once
+    per module -- a module-scoped fixture would still leak the
+    connection across all tests in the same module.
+    """
     db = str(tmp_path / "test.db")
     # Patch DB_PATH for the module
     original = persist.DB_PATH
     persist.DB_PATH = db
+    # Drop any cached connection from a previous test so the next
+    # _get_conn() call opens against the new DB_PATH, not the
+    # previous test's DB.
+    persist._reset_conn()
     persist.init_db()
     yield db, persist._get_conn
+    # Teardown: close the cached connection FIRST so tmp_path's
+    # file-handle release succeeds on Windows, then restore DB_PATH.
+    persist._reset_conn()
     persist.DB_PATH = original
 
 

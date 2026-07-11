@@ -576,7 +576,7 @@
            serializes the live filter state via buildParams() and opens
            /api/deals/export.csv?… so what the user sees is what they download. -->
       <button id="export_csv_btn" type="button" style="background:#fff;color:#1e5b94;border:1px solid #1e5b94;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:0.85rem;" onclick="exportFilteredCsv()" title="Download the current filtered deals as a CSV file">
-        <span>⬇ Export CSV</span>
+        <span id="export_csv_label">⬇ Download CSV</span>
       </button>
       <span id="filter_count" class="filter-badge">0</span>
     </div>
@@ -1221,13 +1221,24 @@ function updateFilterCount() {
 // buildParams() and triggers /api/deals/export.csv?… which honors the same
 // filter params as /api/deals. Opening in a new tab keeps the deals page in
 // place so the user can keep browsing after the download kicks off.
+// MC-346: Export-CSV handler. POSTs/GETs /api/deals.csv (NOT the legacy
+// /api/deals/export.csv endpoint -- per AC1 the new endpoint has the
+// deals_output.csv-compatible schema with a dated filename). Brief
+// 'Downloading…' label swap while the iframe fires, then a green
+// 'Downloaded' confirmation for ~1.5s before restoring the original
+// label. The iframe approach avoids leaving the deals page.
 function exportFilteredCsv() {
   const params = buildParams();
   const qs = params.toString();
-  const url = '/api/deals/export.csv' + (qs ? '?' + qs : '');
-  // Use a hidden iframe so the file downloads without leaving the page; an
-  // anchor target=_blank would also work but the iframe approach is more
-  // reliable across browsers for forced-download Content-Disposition.
+  const url = '/api/deals.csv' + (qs ? '?' + qs : '');
+  const btn = document.getElementById('export_csv_btn');
+  const label = document.getElementById('export_csv_label');
+  if (!label) return;
+  // 1) Loading state
+  const originalLabel = label.textContent;
+  label.textContent = 'Downloading…';
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+  // 2) Hidden iframe triggers the actual download via Content-Disposition
   let iframe = document.getElementById('export_csv_iframe');
   if (!iframe) {
     iframe = document.createElement('iframe');
@@ -1239,6 +1250,18 @@ function exportFilteredCsv() {
   // Export twice in a row with the same filter set.
   const sep = qs ? '&' : '';
   iframe.src = url + sep + '_=' + Date.now();
+  // 3) Confirm after a short delay (the iframe load fires before the
+  // browser's download prompt, so 800ms is a reliable signal that the
+  // request hit the server). Reset label back to the original after 1.5s.
+  setTimeout(() => {
+    label.textContent = '✓ Downloaded';
+    label.style.color = '#0d5c26';
+    setTimeout(() => {
+      label.textContent = originalLabel;
+      label.style.color = '';
+      if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+    }, 1500);
+  }, 800);
 }
 
 function resetFilters() {

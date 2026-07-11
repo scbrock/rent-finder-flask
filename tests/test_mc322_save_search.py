@@ -77,6 +77,14 @@ def reset_db():
                 except Exception:
                     pass
     # Re-init schema for this test
+    # MC-347: re-set DB_PATH to THIS test's path before init_db. Without
+    # this, an earlier-imported test file (e.g. test_mc346_csv_export)
+    # may have overwritten DB_PATH at module load, and init_db() would
+    # then write to the wrong file. The autouse fixture is the right
+    # place to pin the path because pytest's autouse runs once per test,
+    # after the module-load order is fixed.
+    persist_module.DB_PATH = db_path
+    persist_module._reset_conn()
     persist_module.init_db()
     yield
     if hasattr(persist_module, '_reset_conn'):
