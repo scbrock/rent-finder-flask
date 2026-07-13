@@ -9,6 +9,9 @@
   <!-- Leaflet CSS (MC-256) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- Leaflet MarkerCluster CSS (MC-348) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; }
@@ -316,7 +319,245 @@
       th, td { padding: 7px 8px; }
       .stats { flex-direction: column; }
     }
-  </style>
+    /* MC-350: viewed-row treatment — muted opacity, removed hover emphasis,
+     greyed-out price/percent. The mark-viewed-btn (eye icon) sits in the
+     score cell and is hidden by default, fading in on row hover so it
+     does not crowd the default view. */
+  tr.viewed-row { opacity: 0.55; }
+  tr.viewed-row:hover { opacity: 0.85; }
+  tr.viewed-row .age-badge { background: #e5e7eb; color: #6b7280; }
+  tr .mark-viewed-btn {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 120ms ease-in;
+    vertical-align: middle;
+  }
+  tr:hover .mark-viewed-btn,
+  tr.viewed-row .mark-viewed-btn { opacity: 1; }
+  tr .mark-viewed-btn:focus { opacity: 1; outline: 2px solid #2d6a4f; }
+  .viewed-badge {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 6px;
+    background: #e5e7eb;
+    color: #4b5563;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  /* MC-351: 'Recently viewed (N)' filter bar pill — disabled when 0. */
+  .filter-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #fff;
+    color: #2d6a4f;
+    border: 1px solid #2d6a4f;
+    padding: 6px 12px;
+    border-radius: 18px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8rem;
+    align-self: flex-end;
+    transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+  }
+  .filter-pill:hover:not(:disabled) {
+    background: #e6f4ec;
+    color: #1e5b3a;
+  }
+  .filter-pill:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .filter-pill:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+    border-color: #d1d5db;
+    cursor: not-allowed;
+  }
+  .filter-pill-icon {
+    font-size: 0.95rem;
+    line-height: 1;
+  }
+  .filter-pill-label {
+    display: inline-block;
+  }
+
+  /* MC-351: recently viewed popover styles. */
+  #recent_viewed_popover .rv-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    font-size: 1.15rem;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 0 6px;
+    line-height: 1;
+  }
+  #recent_viewed_popover .rv-close:hover {
+    color: #c1452d;
+  }
+  #recent_viewed_popover .rv-header {
+    font-weight: 700;
+    padding: 10px 32px 8px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    color: #1e5b3a;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  #recent_viewed_popover .rv-entries {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  #recent_viewed_popover .rv-entry {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f3f4f6;
+    cursor: pointer;
+    transition: background 0.1s ease;
+  }
+  #recent_viewed_popover .rv-entry:last-of-type {
+    border-bottom: none;
+  }
+  #recent_viewed_popover .rv-entry:hover {
+    background: #f7f8f5;
+  }
+  #recent_viewed_popover .rv-entry--missing {
+    opacity: 0.6;
+    cursor: default;
+  }
+  #recent_viewed_popover .rv-thumb {
+    flex: 0 0 48px;
+    width: 48px;
+    height: 36px;
+    background: #e5e7eb;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+  }
+  #recent_viewed_popover .rv-thumb-img {
+    width: 48px;
+    height: 36px;
+    object-fit: cover;
+    display: block;
+  }
+  #recent_viewed_popover .rv-thumb-fallback {
+    color: #6b7280;
+    font-size: 1rem;
+  }
+  #recent_viewed_popover .rv-body {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  #recent_viewed_popover .rv-price-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: #1e5b3a;
+  }
+  #recent_viewed_popover .rv-pct-chip {
+    display: inline-block;
+    padding: 1px 5px;
+    background: #d4edda;
+    color: #1e5b3a;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  #recent_viewed_popover .rv-meta {
+    color: #4b5563;
+    font-size: 0.78rem;
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #recent_viewed_popover .rv-viewed-ago {
+    color: #6b7280;
+    font-size: 0.7rem;
+    display: inline-block;
+    margin-top: 2px;
+  }
+  #recent_viewed_popover .rv-open-link {
+    flex: 0 0 auto;
+    color: #1e5b94;
+    font-size: 0.78rem;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+  #recent_viewed_popover .rv-open-link:hover {
+    background: #e0f0ff;
+    color: #0c3d6e;
+  }
+  #recent_viewed_popover .rv-open-link--muted {
+    color: #9ca3af;
+    cursor: default;
+  }
+  #recent_viewed_popover .rv-empty {
+    padding: 22px 14px;
+    text-align: center;
+    color: #6b7280;
+    font-size: 0.82rem;
+    font-style: italic;
+  }
+  #recent_viewed_popover .rv-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid #e5e7eb;
+    background: #f9fafb;
+    border-radius: 0 0 8px 8px;
+    font-size: 0.78rem;
+  }
+  #recent_viewed_popover .rv-clear-btn {
+    background: #fff;
+    color: #c1452d;
+    border: 1px solid #c1452d;
+    padding: 3px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  #recent_viewed_popover .rv-clear-btn:hover {
+    background: #fff3f0;
+  }
+  #recent_viewed_popover .rv-overflow-note {
+    color: #6b7280;
+    font-size: 0.72rem;
+    flex: 1 1 auto;
+    text-align: center;
+  }
+  #recent_viewed_popover .rv-view-all {
+    color: #2d6a4f;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  #recent_viewed_popover .rv-view-all:hover {
+    text-decoration: underline;
+  }
+</style>
+
 </head>
 <body>
 <div class="container">
@@ -561,6 +802,37 @@
       <span>📷 With photos only <span id="has_image_count">(...)</span></span>
     </label>
 
+    <!-- MC-350: Hide viewed toggle + Reset viewed link. Per-device
+         localStorage; 'Hide viewed' filters the table down to listings
+         the user has not already considered. 'Reset viewed' link clears
+         the localStorage set after a window.confirm() guard. -->
+    <label class="toggle-btn" id="hide_viewed_toggle" title="Hide listings you have marked as viewed on this device">
+      <input type="checkbox" id="hide_viewed">
+      <span>🙈 Hide viewed</span>
+    </label>
+    <!-- MC-351: 'Recently viewed (N)' pill — one-tap popover that surfaces
+         the last 10 listings the user has marked viewed (data lives in
+         the same localStorage set MC-350 writes; this button is the read
+         surface). Disabled when 0 are marked. Popover dismisses on ×,
+         outside-click, or Escape. -->
+    <button type="button" id="recent_viewed_btn" class="filter-pill"
+       title="Show the last 10 listings you marked viewed on this device">
+      <span class="filter-pill-icon">🕘</span>
+      <span class="filter-pill-label">Recently viewed (<span id="recent_viewed_count">0</span>)</span>
+    </button>
+    <a href="#" id="reset_viewed" onclick="resetViewed();return false;"
+       style="background:#fff;color:#c1452d;border:1px solid #c1452d;padding:6px 10px;border-radius:6px;text-decoration:none;font-weight:600;font-size:0.8rem;display:none;align-self:flex-end;"
+       title="Clear the localStorage set of viewed listings">Reset viewed (0)</a>
+    <!-- MC-351: floating popover anchored under #recent_viewed_btn.
+         data-state="open"|"closed"; display:none when closed so the
+         layout fully collapses. Generated rows are produced by
+         static/recently_viewed.js renderEntry(). -->
+    <div id="recent_viewed_popover" role="dialog" aria-label="Recently viewed listings"
+       data-state="closed"
+       style="display:none;position:absolute;background:#fff;border:1px solid #ccd5cc;border-radius:8px;box-shadow:0 6px 22px rgba(0,0,0,0.18);width:340px;max-width:96vw;z-index:1200;padding:0;color:#1e5b3a;font-size:0.85rem;">
+      <!-- contents rendered by recently_viewed.js -->
+    </div>
+
     <div style="display:flex;gap:6px;align-items:flex-end;">
       <button id="filter_apply" onclick="loadDeals()">Filter</button>
       <button id="filter_reset" onclick="resetFilters()">Reset</button>
@@ -617,6 +889,14 @@
     <button id="btn_table" class="toggle-btn active" onclick="setView('table')" style="padding:5px 12px;font-size:0.8rem;">📋 Table</button>
     <button id="btn_map" class="toggle-btn" onclick="setView('map')" style="padding:5px 12px;font-size:0.8rem;">🗺️ Map</button>
     <span id="map_pin_count" style="font-size:0.78rem;color:#666;display:none;"></span>
+    <!-- MC-349: Bbox-active badge ("X of Y in view") + clear button.
+         Hidden by default; the map_viewport_filter module toggles
+         display + text via data-bbox-active. -->
+    <span id="map_bbox_badge" data-bbox-active="false"
+          style="display:none;font-size:0.78rem;font-weight:600;color:#1e5b3a;background:#e6f4ec;padding:4px 10px;border-radius:12px;border:1px solid #b3d9c2;"></span>
+    <button id="map_bbox_clear" onclick="clearMapBboxFilter(); return false;"
+            style="display:none;font-size:0.74rem;padding:4px 10px;border:1px solid #b3d9c2;background:#fff;color:#1e5b3a;border-radius:6px;cursor:pointer;font-weight:600;"
+            title="Show deals from the entire dataset (not just the current map view)">Clear map filter</button>
   </div>
 
   <!-- Map container (MC-256) -->
@@ -1181,6 +1461,15 @@ function buildParams() {
   const minPctUnder = document.getElementById('min_pct_under').value;
   if (minPctUnder) params.set('min_pct_under', minPctUnder);
 
+  // MC-349: bbox from the Leaflet viewport filter. Module is global (window
+  // .__mapViewportFilter); only attached after init() runs so this is a
+  // no-op on first paint.
+  if (window.__mapViewportFilter
+      && typeof window.__mapViewportFilter.attachQueryStringToParams === 'function'
+      && window.__mapViewportFilter.isActive()) {
+    window.__mapViewportFilter.attachQueryStringToParams(params);
+  }
+
   return params;
 }
 
@@ -1208,6 +1497,8 @@ function updateFilterCount() {
   if (document.getElementById('min_pct_under').value) count++;
   // MC-332: With photos only toggle counts as one active filter when checked.
   if (document.getElementById('has_image').checked) count++;
+  // MC-350: Hide viewed toggle counts as one active filter when checked.
+  if (document.getElementById('hide_viewed').checked) count++;
   const badge = document.getElementById('filter_count');
   if (count > 0) {
     badge.textContent = count;
@@ -1286,6 +1577,10 @@ function resetFilters() {
   // MC-332: clear the With photos only toggle along with all other filters.
   document.getElementById('has_image').checked = false;
   document.getElementById('has_image_toggle').classList.remove('active');
+  // MC-350: clear the Hide viewed toggle - does NOT clear the viewed set,
+  // it only stops filtering. Use the 'Reset viewed' link for that.
+  document.getElementById('hide_viewed').checked = false;
+  document.getElementById('hide_viewed_toggle').classList.remove('active');
   document.getElementById('commute_dest').value = '';
   document.getElementById('max_commute').value = '';
   document.getElementById('max_subway').value = '';
@@ -1318,10 +1613,52 @@ async function loadDeals() {
     const res = await fetch('/api/deals?' + params.toString());
     const payload = await res.json();
     // MC-319: server now returns {deals, total, limit, offset, has_more}
-    const pageDeals = Array.isArray(payload) ? payload : (payload.deals || []);
+    let pageDeals = Array.isArray(payload) ? payload : (payload.deals || []);
     currentTotal = (typeof payload === 'object' && payload && 'total' in payload) ? payload.total : pageDeals.length;
     currentHasMore = !!(payload && payload.has_more);
+    // MC-350: Strip viewed rows when the 'Hide viewed' checkbox is on. This
+    // runs AFTER the server filter so the user sees the exact server
+    // response minus their locally-marked rows. Keeping it client-side
+    // avoids a round-trip every time the user toggles a row.
+    if (window.__listingViewed && typeof window.__listingViewed.filterDeals === 'function') {
+      const before = pageDeals.length;
+      pageDeals = window.__listingViewed.filterDeals(pageDeals);
+      // currentTotal stays at the server-reported count (so the user
+      // knows the full universe); the loaded count shows the post-filter
+      // number.
+      if (before !== pageDeals.length && window.console && console.debug) {
+        console.debug('MC-350: filtered', before - pageDeals.length, 'viewed rows from current page');
+      }
+    }
     allDeals = pageDeals;
+
+    // MC-349: Feed "X in view / Y total" counters to the viewport filter so
+    // the badge can show progress ("12 of 376 in view"). Both numbers come
+    // from the server response — inView is total AFTER bbox filter.
+    // The unfiltered total ("Y") needs a parallel request to /api/deals
+    // because the server already filtered by bbox when this response was
+    // built. We only fire that parallel fetch while the bbox filter is
+    // actually active (cheap on non-map-view: no second network round-trip).
+    if (window.__mapViewportFilter
+        && typeof window.__mapViewportFilter.updateStats === 'function') {
+      if (window.__mapViewportFilter.isActive()) {
+        window.__mapViewportFilter.updateStats(currentTotal, currentTotal);
+        // Parallel fetch for the unfiltered total; the result is fire-
+        // and-forget — if it ever loses a race the badge falls back to
+        // "X in view" mode which is the safe default (no broken state).
+        const noBboxParams = new URLSearchParams(params);
+        noBboxParams.delete('bbox');
+        fetch('/api/deals?' + noBboxParams.toString()).then(function (r) {
+          return r.json();
+        }).then(function (p2) {
+          const unfiltered = (p2 && typeof p2.total === 'number') ? p2.total : 0;
+          if (unfiltered > 0 && window.__mapViewportFilter
+              && window.__mapViewportFilter.isActive()) {
+            window.__mapViewportFilter.updateStats(currentTotal, unfiltered);
+          }
+        }).catch(function () { /* ignore — badge falls back to "X in view" */ });
+      }
+    }
 
     // MC-271: Hydrate is_saved on each deal from shortlistStatus
     if (userEmail) {
@@ -1382,6 +1719,15 @@ async function loadDeals() {
 
     currentOffset = allDeals.length; // first page size = total loaded so far
     renderDeals(allDeals, { total: currentTotal, loaded: allDeals.length, hasMore: currentHasMore });
+    // MC-351: keep the popover's deals cache in sync with the live table
+    // so opening the popover after a filter change shows the current
+    // thumbnails / prices rather than stale data from page load.
+    try {
+      if (window.__recentlyViewedView && typeof window.__recentlyViewedView.setDeals === 'function') {
+        window.__recentlyViewedView.setDeals(allDeals);
+        window.__recentlyViewedView.refresh();
+      }
+    } catch (e) { /* swallow */ }
   } catch(e) {
     document.getElementById('loading').textContent = 'Error: ' + e.message;
   }
@@ -1683,8 +2029,14 @@ function _renderNbhdTrendBadge(trend) {
       cautionsHtml = '<span class="clean-badge">✓ Clean</span>';
     }
 
-    const row = `<tr data-listing-id="${d.listing_id || d.link || ''}">
-      <td style="font-size:1.1rem;font-weight:800;color:#2d6a4f;text-align:center;" title="Deal score - higher is better">${d.final_score ? d.final_score.toFixed(3) : (d.score || 0).toFixed(3)}</td>
+    // MC-350: viewed rows get a .viewed-row class for muted styling + a
+    // small mark-viewed-btn (eye icon, opacity 0 → 1 on tr:hover) in the
+    // score cell. We compute `viewed` here so it's reused below for the
+    // Age cell badge.
+    const _viewedId = d.listing_id || d.link || '';
+    const _viewed = !!(window.__listingViewed && window.__listingViewed.isViewed(_viewedId));
+    const row = `<tr data-listing-id="${_viewedId}" class="${_viewed ? 'viewed-row' : ''}">
+      <td style="font-size:1.1rem;font-weight:800;color:#2d6a4f;text-align:center;" title="Deal score - higher is better">${d.final_score ? d.final_score.toFixed(3) : (d.score || 0).toFixed(3)}<button class="mark-viewed-btn" type="button" data-listing-id="${(_viewedId).replace(/"/g, '&quot;')}" aria-label="${_viewed ? 'Unmark viewed' : 'Mark viewed'}" title="${_viewed ? 'Unmark viewed' : 'Mark viewed (or right-click row)'}">${_viewed ? '👁️' : '👁️'}</button></td>
       <td style="text-align:center;padding:4px;"><input type="checkbox" class="compare-check" data-listing-id="${(d.listing_id || d.link || '').replace(/"/g, '&quot;')}" onchange="if(window.__compare){window.__compare.toggleCompare(this.getAttribute('data-listing-id'));window.__compare.updateCompareBadge();}" /></td>
       <td class="thumb-cell">${(() => {
         const img = (d.image_url || '').trim();
@@ -1714,7 +2066,7 @@ function _renderNbhdTrendBadge(trend) {
       <td>${d.fair_value_fmt || '-'}</td>
       <td class="${pctCls}" style="font-size:1rem;font-weight:700;"><strong>${pct}</strong></td>
       <td>${commute}</td>
-      <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span></td>
+      <td><span class="age-badge ${daysAgoClass}">${daysAgoStr}</span>${_viewed ? window.__listingViewed.renderViewedBadge(_viewedId) : ''}</td>
       <td><span class="listed-badge ${daysListedClass}">${daysListedStr}</span></td>
       <td>${groceryHtml}</td>
       <td>${ttcHtml}</td>
@@ -1798,7 +2150,7 @@ document.getElementById('has_image').addEventListener('change', function() {
 });
 
 // Wire up all inputs to update filter count on change
-['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'min_pct_under', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped', 'has_image'].forEach(function(id) {
+['beds_min', 'baths_min', 'price_min', 'price_max', 'max_price_per_sqft', 'min_pct_under', 'neighbourhood', 'region', 'source', 'max_subway', 'only_new', 'price_dropped', 'has_image', 'hide_viewed'].forEach(function(id) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', updateFilterCount);
 });
@@ -1813,6 +2165,13 @@ loadPriceDropCountBadge();  // MC-325: populate the "(N drops)" hint next to the
 loadHasImageCountBadge();  // MC-332: populate the "(N photos)" hint next to the With photos only toggle
 loadHealthPill();        // MC-335: live data-freshness pill in header
 loadNewTodayPill();      // MC-339: "X new today" pill in header (24h window)
+// MC-349: Initialise the map viewport filter state. Module is global via
+// map_viewport_filter.js; without an explicit init() the module still
+// defaults to debounceMs=300 so this is mostly for explicitness.
+if (window.__mapViewportFilter
+    && typeof window.__mapViewportFilter.init === 'function') {
+  window.__mapViewportFilter.init({ debounceMs: 300 });
+}
 loadDeals();
 
 // ── MC-335: Live data-freshness pill ─────────────────────────────────────────
@@ -2381,6 +2740,7 @@ if (tbody) {
 
 let mapInstance = null;
 let mapMarkers = [];
+let mapCluster = null;     // MC-348: cluster group wrapper {group, addMarker, clear, getBounds, isRealCluster}
 let currentView = 'table';
 let geoDeals = [];
 
@@ -2425,9 +2785,54 @@ function initMap() {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
   }).addTo(mapInstance);
+  // MC-348: Build cluster group after tile layer so the plugin (or fallback) owns marker rendering.
+  if (window.__mapCluster && typeof window.__mapCluster.createClusterGroup === 'function') {
+    mapCluster = window.__mapCluster.createClusterGroup(L, mapInstance, {
+      maxClusterRadius: 80,
+      disableClusteringAtZoom: 16,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      chunkedLoading: true,
+    });
+  }
+  // MC-349: Attach bbox filter to map moveend events. Idempotent — re-entering
+  // the map view doesn't double-bind. The module debounces internally so
+  // quick pans issue a single refetch, not N. We also forward onChange to
+  // loadDeals + updateMap so the table and cluster both refetch in lockstep.
+  if (window.__mapViewportFilter
+      && typeof window.__mapViewportFilter.attachMap === 'function') {
+    window.__mapViewportFilter.attachMap(L, mapInstance);
+    window.__mapViewportFilter.attachListeners({
+      onChange: function () {
+        // Re-fetch the deals table AND the geo pin set so both views stay
+        // consistent with the new viewport. Guarded by currentView so we
+        // don't fire updateMap() when the user is on the table view.
+        loadDeals();
+        if (typeof currentView !== 'undefined' && currentView === 'map') {
+          updateMap();
+        }
+      },
+    });
+  }
+}
+
+// MC-349: User-triggered "Clear map filter" — drop the bbox constraint and
+// re-fetch both views. Wired via inline onclick in the badge markup above.
+function clearMapBboxFilter() {
+  if (window.__mapViewportFilter
+      && typeof window.__mapViewportFilter.clear === 'function') {
+    window.__mapViewportFilter.clear();
+  }
+  loadDeals();
+  if (typeof currentView !== 'undefined' && currentView === 'map') {
+    updateMap();
+  }
 }
 
 function clearMarkers() {
+  if (mapCluster) {
+    mapCluster.clear();
+  }
   mapMarkers.forEach(m => mapInstance.removeLayer(m));
   mapMarkers = [];
 }
@@ -2461,11 +2866,25 @@ function updateMap() {
           </div>`;
         const marker = L.marker([d.lat, d.lng], {
           icon: buildPinIcon(d.pct_under || 0, d.price_fmt)
-        }).bindPopup(popup).addTo(mapInstance);
+        }).bindPopup(popup);
+        // MC-348: route marker through the cluster group (or plain layer fallback).
+        if (mapCluster) {
+          mapCluster.addMarker(marker, { pctUnder: d.pct_under || 0 });
+        } else {
+          marker.addTo(mapInstance);
+        }
         mapMarkers.push(marker);
       });
 
-      if (data.length > 0) {
+      if (data.length > 0 && mapCluster) {
+        const bounds = mapCluster.getBounds();
+        if (bounds && bounds.isValid && bounds.isValid()) {
+          mapInstance.fitBounds(bounds.pad(0.1));
+        } else if (bounds) {
+          mapInstance.fitBounds(bounds.pad(0.1));
+        }
+      } else if (data.length > 0) {
+        // Fallback path: no cluster group available, use marker bounds directly.
         const group = L.featureGroup(mapMarkers);
         mapInstance.fitBounds(group.getBounds().pad(0.1));
       }
@@ -2598,12 +3017,23 @@ async function loadSimilarShortlist() {
 <!-- Leaflet JS (MC-256) -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<!-- Leaflet MarkerCluster JS (MC-348) -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<!-- MC-348: cluster wrapper (creates markerClusterGroup with color-coded bubbles) -->
+<script src="{{ url_for('static', filename='map_cluster.js') }}"></script>
+<!-- MC-349: Map viewport filter — drives bbox filter on /api/deals + /api/deals/geo from Leaflet moveend -->
+<script src="{{ url_for('static', filename='map_viewport_filter.js') }}"></script>
 <!-- MC-309: Lazy-load Craigslist photos in deals table thumbnail column -->
 <script src="{{ url_for('static', filename='cl_photo_lazy.js') }}"></script>
 <!-- MC-312: Multi-image gallery carousel for the detail modal -->
 <script src="{{ url_for('static', filename='listing_gallery.js') }}"></script>
 <!-- MC-313: Side-by-side deal comparison -->
 <script src="{{ url_for('static', filename='compare.js') }}"></script>
+<!-- MC-350: 'Hide viewed' filter + localStorage 'mark viewed' button -->
+<script src="{{ url_for('static', filename='listing_viewed.js') }}"></script>
+<!-- MC-351: 'Recently viewed (N)' popover (one-tap access to last N viewed
+     listings, reuses MC-350's rf_viewed_ids localStorage state). -->
+<script src="{{ url_for('static', filename='recently_viewed.js') }}"></script>
 <script>
   // MC-313: Initialize compare state from localStorage and sync checkboxes
   // after each table render. The state survives page reloads; checkboxes
@@ -2620,6 +3050,166 @@ async function loadSimilarShortlist() {
         if (window.__compare) window.__compare.syncRowCheckboxes();
       });
       obs.observe(tbody, { childList: true });
+    }
+  })();
+</script>
+<script>
+  // MC-350: Initialize the 'viewed' module: load the localStorage set,
+  // update the 'Reset viewed (N)' link text, and wire the right-click +
+  // mark-viewed button + hide-viewed checkbox + cross-tab storage sync.
+  (function () {
+    if (!window.__listingViewed) return;
+    window.__listingViewed.resetViewedLinkText();
+    // Cross-tab sync: when a second tab mutates localStorage, re-render
+    // the table so the muted-row class + filter applies immediately.
+    window.__listingViewed.listenStorage(function () {
+      window.__listingViewed.resetViewedLinkText();
+      // Re-render to flip .viewed-row class on newly-viewed rows. Use the
+      // existing renderDeals() pipeline so sort/filter/pagination all stay
+      // intact.
+      if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)) {
+        if (typeof renderDeals === 'function') {
+          renderDeals(window.allDeals, {
+            total: window.currentTotal,
+            loaded: window.allDeals.length,
+            hasMore: window.currentHasMore,
+          });
+        }
+      }
+    });
+    // Hide-viewed checkbox: re-run filter when toggled.
+    var hideCb = document.getElementById('hide_viewed');
+    if (hideCb) {
+      hideCb.addEventListener('change', function () {
+        // Sync the .toggle-btn styling
+        var wrap = document.getElementById('hide_viewed_toggle');
+        if (wrap) wrap.classList.toggle('active', hideCb.checked);
+        // Re-run the filter pipeline.
+        if (typeof loadDeals === 'function') loadDeals();
+        else if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)
+                 && typeof renderDeals === 'function') {
+          renderDeals(window.allDeals, {
+            total: window.currentTotal,
+            loaded: window.allDeals.length,
+            hasMore: window.currentHasMore,
+          });
+        }
+      });
+    }
+    // Right-click + mark-viewed button event delegation on the table body.
+    var tbody350 = document.getElementById('deals_body');
+    if (tbody350) {
+      tbody350.addEventListener('contextmenu', function (ev) {
+        var tr = ev.target && ev.target.closest && ev.target.closest('tr');
+        if (!tr || !tr.getAttribute) return;
+        var id = tr.getAttribute('data-listing-id');
+        if (!id) return;
+        ev.preventDefault();
+        window.__listingViewed.toggleViewed(id);
+        window.__listingViewed.resetViewedLinkText();
+        // Re-render so .viewed-row class + badge appear/disappear immediately.
+        if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)
+            && typeof renderDeals === 'function') {
+          renderDeals(window.allDeals, {
+            total: window.currentTotal,
+            loaded: window.allDeals.length,
+            hasMore: window.currentHasMore,
+          });
+        }
+        if (typeof window.__listingViewed.hideViewedEnabled === 'function'
+            && window.__listingViewed.hideViewedEnabled()
+            && typeof loadDeals === 'function') {
+          loadDeals();
+        }
+      });
+      tbody350.addEventListener('click', function (ev) {
+        var btn = ev.target && ev.target.closest && ev.target.closest('.mark-viewed-btn');
+        if (!btn || !btn.getAttribute) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        var id = btn.getAttribute('data-listing-id');
+        if (!id) return;
+        window.__listingViewed.toggleViewed(id);
+        window.__listingViewed.resetViewedLinkText();
+        if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)
+            && typeof renderDeals === 'function') {
+          renderDeals(window.allDeals, {
+            total: window.currentTotal,
+            loaded: window.allDeals.length,
+            hasMore: window.currentHasMore,
+          });
+        }
+        if (typeof window.__listingViewed.hideViewedEnabled === 'function'
+            && window.__listingViewed.hideViewedEnabled()
+            && typeof loadDeals === 'function') {
+          loadDeals();
+        }
+      });
+    }
+  })();
+
+  // MC-350: Reset viewed handler - clears localStorage after confirm().
+  // Window.confirm() blocks until the user clicks Yes/Cancel; the page
+  // stays interactive (modern browsers) and the table re-renders.
+  function resetViewed() {
+    if (!window.__listingViewed) return false;
+    var n = window.__listingViewed.count();
+    if (n === 0) {
+      // Nothing to reset - hide the link & return.
+      window.__listingViewed.resetViewedLinkText();
+      return false;
+    }
+    var ok = window.confirm('Clear all ' + n + ' viewed listings?\nThis only affects THIS device.');
+    if (!ok) return false;
+    window.__listingViewed.clearAll();
+    window.__listingViewed.resetViewedLinkText();
+    if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)
+        && typeof renderDeals === 'function') {
+      renderDeals(window.allDeals, {
+        total: window.currentTotal,
+        loaded: window.allDeals.length,
+        hasMore: window.currentHasMore,
+      });
+    }
+    return false;
+  }
+
+  // MC-351: Initialize the 'Recently viewed' popover. Reuses the same
+  // localStorage state MC-350 writes; this module just surfaces it as a
+  // one-tap pill in the filter bar. The popover pulls its current deals
+  // from window.allDeals (set by the most recent loadDeals()) so each
+  // entry can show thumbnail + price + neighbourhood + pct-under-market.
+  (function () {
+    if (!window.__recentlyViewed || typeof window.__recentlyViewed.createView !== 'function') {
+      return;
+    }
+    var rv = window.__recentlyViewed.createView();
+    // Expose the view instance so the loadDeals() hook can keep the
+    // deals cache fresh — the createView() factory returns the API, not
+    // the factory itself, and we want a stable reference across hooks.
+    window.__recentlyViewedView = rv;
+    var btn = document.getElementById('recent_viewed_btn');
+    var pop = document.getElementById('recent_viewed_popover');
+    if (btn && pop) {
+      rv.attachPopover(btn, pop, {
+        // Refresh the deals cache from window.allDeals right before opening
+        // so thumbnails / prices / neighbourhoods are always current.
+        getDeals: function () {
+          return (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals))
+            ? window.allDeals : [];
+        },
+      });
+      // Cross-tab sync: re-bind popover when another tab mutates the set.
+      rv.listenStorage(function () {
+        if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)) {
+          rv.setDeals(window.allDeals);
+        }
+        rv.refresh();
+      });
+      // Initial popover state: hydrate from current window.allDeals if any.
+      if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)) {
+        rv.setDeals(window.allDeals);
+      }
     }
   })();
 </script>
