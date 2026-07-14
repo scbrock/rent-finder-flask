@@ -556,6 +556,114 @@
   #recent_viewed_popover .rv-view-all:hover {
     text-decoration: underline;
   }
+
+  /* MC-353: recent filter searches popover styles. */
+  #recent_searches_popover .rs-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: #6b7280;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  #recent_searches_popover .rs-close:hover {
+    background: #f3f4f6;
+    color: #1e5b3a;
+  }
+  #recent_searches_popover .rs-header {
+    font-weight: 700;
+    color: #1e5b3a;
+    padding: 10px 14px 6px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 0.9rem;
+  }
+  #recent_searches_popover .rs-entries {
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  #recent_searches_popover .rs-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #f3f4f6;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  #recent_searches_popover .rs-entry:last-of-type {
+    border-bottom: none;
+  }
+  #recent_searches_popover .rs-entry:hover {
+    background: #f0f9f4;
+  }
+  #recent_searches_popover .rs-body {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  #recent_searches_popover .rs-label {
+    font-weight: 600;
+    color: #1e5b3a;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #recent_searches_popover .rs-ago {
+    color: #6b7280;
+    font-size: 0.7rem;
+    margin-top: 2px;
+  }
+  #recent_searches_popover .rs-delete {
+    flex: 0 0 auto;
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    font-size: 0.9rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  #recent_searches_popover .rs-delete:hover {
+    background: #f3f4f6;
+    color: #c1452d;
+  }
+  #recent_searches_popover .rs-empty {
+    padding: 24px 14px;
+    color: #6b7280;
+    font-style: italic;
+    font-size: 0.82rem;
+    text-align: center;
+  }
+  #recent_searches_popover .rs-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid #e5e7eb;
+    background: #f9fafb;
+  }
+  #recent_searches_popover .rs-clear-btn {
+    background: #fff;
+    color: #c1452d;
+    border: 1px solid #c1452d;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  #recent_searches_popover .rs-clear-btn:hover {
+    background: #fff3f0;
+  }
+  #recent_searches_popover .rs-count-note {
+    color: #6b7280;
+    font-size: 0.72rem;
+  }
 </style>
 
 </head>
@@ -831,6 +939,30 @@
        data-state="closed"
        style="display:none;position:absolute;background:#fff;border:1px solid #ccd5cc;border-radius:8px;box-shadow:0 6px 22px rgba(0,0,0,0.18);width:340px;max-width:96vw;z-index:1200;padding:0;color:#1e5b3a;font-size:0.85rem;">
       <!-- contents rendered by recently_viewed.js -->
+    </div>
+
+    <!-- MC-353: 'Recent searches ▾' pill — one-tap popover that surfaces
+         the last 5 filter combinations the user has run (data lives in
+         localStorage 'rf_recent_searches'). Distinct from MC-322's named
+         saved-searches page: this is anonymous, lightweight, browser-side
+         only (no email / no SQLite / no names). Disabled until the first
+         filter combo is saved. Popover dismisses on ×, outside-click, or
+         Escape. -->
+    <button type="button" id="recent_searches_btn" class="filter-pill"
+       title="Show the last 5 filter combinations you've applied on this device"
+       disabled data-count="0">
+      <span class="filter-pill-icon">⌕</span>
+      <span class="filter-pill-label">Recent searches (<span id="recent_searches_count">0</span>)</span>
+      <span class="filter-pill-caret" aria-hidden="true">▾</span>
+    </button>
+    <!-- MC-353: floating popover anchored under #recent_searches_btn.
+         data-state="open"|"closed"; display:none when closed so the
+         layout fully collapses. Generated rows are produced by
+         static/recent_searches.js renderEntry(). -->
+    <div id="recent_searches_popover" role="dialog" aria-label="Recent filter searches"
+       data-state="closed"
+       style="display:none;position:absolute;background:#fff;border:1px solid #ccd5cc;border-radius:8px;box-shadow:0 6px 22px rgba(0,0,0,0.18);width:340px;max-width:96vw;z-index:1200;padding:0;color:#1e5b3a;font-size:0.85rem;">
+      <!-- contents rendered by recent_searches.js -->
     </div>
 
     <div style="display:flex;gap:6px;align-items:flex-end;">
@@ -1728,6 +1860,29 @@ async function loadDeals() {
         window.__recentlyViewedView.refresh();
       }
     } catch (e) { /* swallow */ }
+    // MC-353: snapshot the active filter set into the recent-searches
+    // history (debounced 1s so a flurry of filter changes only writes
+    // the final state). The module's own dedup check skips duplicate
+    // writes when the filter set matches the most-recent entry.
+    try {
+      if (window.__recentSearchesView
+          && typeof window.__recentSearchesView.saveCurrentDebounced === 'function'
+          && typeof buildParams === 'function') {
+        const currentFilters = {};
+        const p = buildParams();
+        for (const [k, v] of p.entries()) currentFilters[k] = v;
+        window.__recentSearchesView.saveCurrentDebounced(currentFilters);
+        // Update the pill badge immediately so users see the count move
+        // without waiting for the debounce to settle.
+        const rsCountEl = document.getElementById('recent_searches_count');
+        if (rsCountEl) rsCountEl.textContent = String(window.__recentSearchesView.count() + 1);
+        const rsBtn = document.getElementById('recent_searches_btn');
+        if (rsBtn) {
+          rsBtn.disabled = false;
+          rsBtn.setAttribute('data-count', String(window.__recentSearchesView.count() + 1));
+        }
+      }
+    } catch (e) { /* swallow - broken recent-searches save must never break the page render */ }
   } catch(e) {
     document.getElementById('loading').textContent = 'Error: ' + e.message;
   }
@@ -3034,6 +3189,12 @@ async function loadSimilarShortlist() {
 <!-- MC-351: 'Recently viewed (N)' popover (one-tap access to last N viewed
      listings, reuses MC-350's rf_viewed_ids localStorage state). -->
 <script src="{{ url_for('static', filename='recently_viewed.js') }}"></script>
+<!-- MC-353: 'Recent searches ▾' popover (last 5 filter combinations
+     from this device's localStorage, browser-only; no backend writes).
+     Coexists with MC-322 (named saved-searches page) — MC-353 is the
+     lightweight "quick recall" affordance; MC-322 is the
+     email-notification flow. -->
+<script src="{{ url_for('static', filename='recent_searches.js') }}"></script>
 <script>
   // MC-313: Initialize compare state from localStorage and sync checkboxes
   // after each table render. The state survives page reloads; checkboxes
@@ -3210,6 +3371,53 @@ async function loadSimilarShortlist() {
       if (typeof window.allDeals !== 'undefined' && Array.isArray(window.allDeals)) {
         rv.setDeals(window.allDeals);
       }
+    }
+  })();
+
+  // MC-353: Initialize the 'Recent searches' dropdown. Captures the active
+  // filter combo on every successful loadDeals() via saveCurrentDebounced()
+  // (1s debounce so a flurry of filter changes only writes the final
+  // state). Clicking an entry dispatches synthetic change events so
+  // updateFilterCount + loadDeals fire correctly. Cross-tab sync uses
+  // the same storage-event pattern as MC-350/MC-351.
+  (function () {
+    if (!window.__recentSearches || typeof window.__recentSearches.createView !== 'function') {
+      return;
+    }
+    var rs = window.__recentSearches.createView();
+    window.__recentSearchesView = rs;
+    var btn = document.getElementById('recent_searches_btn');
+    var pop = document.getElementById('recent_searches_popover');
+    if (btn && pop) {
+      rs.attachPopover(btn, pop);
+      // Wire restore through the page's existing applySavedFilters() helper
+      // (set of filter keys) + manually feed it the canonicalized filter
+      // object so each form input lands exactly where it should.
+      rs.onRestore({
+        apply: function (filters) {
+          if (typeof window.applySavedFilters === 'function') {
+            try { window.applySavedFilters(filters); } catch (e) { /* swallow */ }
+          }
+        }
+      });
+      // Cross-tab sync: another tab mutating the localStorage key triggers
+      // a refresh of the trigger badge (so the count updates) and re-renders
+      // the popover if it's currently open.
+      rs.listenStorage(function () {
+        // Update the count badge in the pill.
+        var countEl = document.getElementById('recent_searches_count');
+        if (countEl) countEl.textContent = String(rs.count());
+        if (btn) {
+          btn.disabled = (rs.count() === 0);
+          btn.setAttribute('data-count', String(rs.count()));
+        }
+      });
+      // Initial pill state.
+      var initialCount = rs.count();
+      var countElInit = document.getElementById('recent_searches_count');
+      if (countElInit) countElInit.textContent = String(initialCount);
+      btn.disabled = (initialCount === 0);
+      btn.setAttribute('data-count', String(initialCount));
     }
   })();
 </script>

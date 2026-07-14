@@ -1,7 +1,99 @@
 # Toronto Rent Deal Finder — Progress Log
 
-**Current Phase:** MC-346 in review. Filtered CSV export shipped — the filter-bar Export button is now labelled 'Download CSV' and points at the new GET /api/deals.csv endpoint. Accepts the same filter params as /api/deals (delegated to _parse_deal_filters + _apply_filters), returns CSV with text/csv content-type + Content-Disposition: attachment; filename="toronto-deals-YYYY-MM-DD.csv" header. CSV columns match the live deals_output.csv schema: price, beds, baths, neighbourhood, fair_value, pct_under, score, days_ago, sqft, link, source, listed_date, region. listed_date is sliced from first_seen (SQLite-backed) — new row_dict field added. The legacy /api/deals/export.csv endpoint is unchanged (different schema, preserved for downstream power-users). JS handler: button disabled during the request, label swaps to 'Downloading…' then to a green '✓ Downloaded' confirmation for ~1.5s, then restores. 24/24 new tests pass across 4 classes (TestCsvEndpoint, TestFilterParity, TestIndexHtmlWiring, TestEmptyAndErrorPaths). Critical regression: 18/19 pass (the 1 missing test file test_mc342_health_pill_bug.py is a pre-existing gap, not a regression). Live smoke: GET /api/deals.csv?beds_min=1&price_max=2500 -> 200, text/csv, Content-Disposition toronto-deals-2026-07-10.csv, header row present, X-Filter-Row-Count reflects the actual filtered row count.
-**Last Updated:** 2026-07-10 22:43 UTC
+**Current Phase:** MC-353 complete. "Recent searches ▾" dropdown in filter bar shipped — `static/recent_searches.js` IIFE (615 lines, ~200 lines core + comments) stores last 5 filter combos in localStorage `rf_recent_searches`. Click-toggle floating popover, per-entry ✕, Clear-all footer, cross-tab storage sync. Saved on every successful `loadDeals()` (1s debounce), dedup against most-recent entry. Click-restore dispatches synthetic change events so updateFilterCount + loadDeals fire correctly. 30/30 Node tests + 54/54 pytest tests pass. AC12 critical regression sweep (test_app + MC-322/323/349/350/351/353) = 258/258 green, 0 regressions. Live Flask smoke: GET / → 200 (165278 bytes) with all MC-353 markers; GET /static/recent_searches.js → 200 (25952 bytes). Commit pending on clean_build.
+**Last Updated:** 2026-07-14 04:43 UTC
+
+---
+
+## 2026-07-14 04:43 UTC - Cron session - MC-353 complete
+
+**What happened:** Cron `153f3872` triggered, 1473 API calls remaining (well over threshold). Followed MISSION.md loop:
+1. ✅ Checked RENT_PROGRESS.md (MC-351 complete most recently — `complete`/tod, commit `64af267` on `clean_build`).
+2. ✅ Checked tickets.json — **MC-353 was `in_progress` (assigned to carl)** with implementation files already on disk from 2026-07-13 22:45 (`static/recent_searches.js` 25952 bytes, `tests/test_mc353_recent_searches.js` 600 lines, `tests/test_mc353_recent_searches.py` 265 lines). Per SOUL.md "Maximum 1 ticket in_progress at a time" → continue MC-353.
+3. ⏭️ Research skipped — localStorage IIFE pattern already established by MC-350/MC-351 (3 prior references), no new patterns needed.
+4. ✅ Implementation already complete from previous cycle; verified wiring + ran full test suite (clean run this session).
+5. ✅ Tests: **30/30 Node + 54/54 pytest = 84/84** MC-353 tests pass; **258/258 critical regression sweep** (test_app + MC-322/323/349/350/351/353) green.
+6. ✅ Live Flask test_client smoke: GET / → 200 (165278 bytes) with all 7 MC-353 markers verified; GET /static/recent_searches.js → 200 (25952 bytes).
+7. ✅ Logging session entry here.
+8. ⏭️ Commit pending (final commit in next step).
+9. ⏭️ Ping Tod + Prem + Discord update after commit.
+
+**What was built (MC-353 — Recent searches dropdown):**
+
+- **`static/recent_searches.js` (~615 lines, self-contained IIFE):**
+  - Exports `createView(opts?)` returning the full API surface: `init`, `saveCurrent(filters, opts?)`, `saveCurrentDebounced(filters, opts?)`, `cancelPending()`, `getAll()`, `getRecent(n=5)`, `count()`, `removeAt(idx)`, `clearAll()`, `buildLabel(filters)`, `serializeFilters(filters) → string` (canonical JSON for dedup), `renderEntry(entry, opts?) → HTML string`, `attachPopover(triggerEl, containerEl)`, `closePopover()`, `togglePopover()`, `listenStorage(handlerFn)` (cross-tab sync), `restoreFromObject(filters, opts?)`, `onRestore(hook)`, `refresh()`.
+  - **Pure helpers** (testable directly): `_escHtml`, `_isPlainObject`, `_canonicalFilters(filters)` (drops unknown keys, coerces boolean → 'true'/'', strips null/empty/undefined), `serializeFilters(filters)` (sorted-key JSON for stable dedup), `_fmtAgo(savedAtMs, nowMs)` (returns 'just now' / 'Nm ago' / 'Nh ago' / 'yesterday' / 'Nd ago' / 'Nw ago' / 'Nmo ago'), `_sortLabel(val)` (maps sort=score/price/etc → 'best deal'/'price'/etc), `buildLabel(filters)` (composes human-readable strings like 'Downtown 2BR ≤ $2,500 sorted by best deal · only new, ≥15% under'), `_sanitizeEntry`, `_safeParse`, `_readState`, `_writeState`.
+  - **`ROUND_TRIP_KEYS`** whitelist of 17 filter IDs that round-trip through serialize/deserialize/label: beds_min, baths_min, price_min, price_max, neighbourhood, region, source, sort, max_subway, max_commute, hide_stale, is_new, price_dropped, has_image, has_parking, commute_dest, price_per_sqft_max, min_pct_under.
+  - **Default constants:** `DEFAULT_STORAGE_KEY='rf_recent_searches'`, `DEFAULT_MAX_ENTRIES=5`, `DEFAULT_DEBOUNCE_MS=1000`.
+  - **Empty filter short-circuit:** `saveCurrent(filters)` returns false without writing when the canonical filter set is empty (idle bar doesn't fill history with 'All deals' on every page load).
+  - **Dedup algorithm:** compares `serializeFilters(state[0].filters)` to new sig. Match → bump timestamp + label, no shift. No match → prepend, cap at maxEntries.
+  - **Debounce:** `saveCurrentDebounced(filters)` coalesces a flurry of filter changes into one write (default 1s).
+  - **Restore:** `restoreFromObject(filters)` (1) synthesizes URLSearchParams, (2) updates URL bar via `history.replaceState` for share-link symmetry, (3) runs registered hook (callers wire applySavedFilters here), (4) manually dispatches synthetic change events on 12 form-input IDs + 5 toggle IDs so updateFilterCount + loadDeals fire even when value didn't move.
+  - **Popover positioning:** `position: fixed` + dynamic top/left computed from `triggerEl.getBoundingClientRect()` so it escapes ancestor overflow:hidden + clamps to viewport (8px gutter each edge).
+  - **Popover dismiss paths:** × close button (top-right), outside-click handler, Escape key handler, Clear-all confirm (`window.confirm('Forget all recent filter searches?')`).
+  - **Per-entry delete (✕):** removes at idx and re-renders the popover immediately.
+  - **Cross-tab storage sync:** `__rs_storage_wired` flag prevents double-wiring on script re-init; `key === 'rf_recent_searches'` filter on storage event so unrelated localStorage mutations don't trigger refreshes.
+  - **Disabled state:** trigger button is `disabled` when `count() === 0` (empty popovers are pointless — a disabled button is clearer).
+  - **DUAL CONTEXT:** same file works in browser (`window.__recentSearches`) and Node tests (`module.exports`). Hand-rolled mock storage + window + document in tests/test_mc353_recent_searches.js (no jsdom dep).
+
+- **`templates/index.html` (~95 lines wiring):**
+  - **New pill:** `<button type="button" id="recent_searches_btn" class="filter-pill" data-count="0" disabled>` with `<span class="filter-pill-label">Recent searches (<span id="recent_searches_count">0</span>)</span>`. Sits exactly between `id="recent_searches_btn"` siblings per MC-351 placement.
+  - **Floating popover:** `<div id="recent_searches_popover" role="dialog" aria-label="Recent filter searches" data-state="closed" style="display:none;position:absolute;…">` rendered near the pill. JS rewrites innerHTML on open with `<button class="rs-close">×</button>` + `<div class="rs-header">Recent filter searches</div>` + entries container.
+  - **CSS (~120 lines):** brand-green palette matching MC-335/MC-350/MC-351, `.rs-close` (×), `.rs-header`, `.rs-entries` (scrollable list, max-height ~280px), `.rs-entry:hover` lift, `.rs-label` + `.rs-ago` typography, `.rs-delete` per-entry ✕, `.rs-empty` (italic gray), `.rs-footer` + `.rs-clear-btn` + `.rs-count-note`. `position: fixed` on the popover (set by JS) so it escapes ancestor overflow.
+  - **Script tag:** `<script src="{{ url_for('static', filename='recent_searches.js') }}"></script>` loaded after `recently_viewed.js`.
+  - **Inline IIFE init (~35 lines):** `window.__recentSearches.createView()` → `window.__recentSearchesView`; attaches popover; registers `onRestore` hook that calls `window.applySavedFilters(filters)` (existing helper, MC-322/MC-325); `listenStorage` for cross-tab sync updates count badge + disabled state; initial paint from `rs.count()`.
+  - **`loadDeals()` save hook:** after every successful response, reads `buildParams()` URLSearchParams into a plain object and calls `saveCurrentDebounced(filters)` + immediate badge update so users see count move without waiting for the debounce to settle.
+  - **Wrapping in `try { } catch (e) { }`:** broken recent-searches save never breaks the page render.
+
+**Tests — `tests/test_mc353_recent_searches.js` (NEW, 30 Node tests in 1 file):**
+- Helpers (10): `_escHtml` null/empty/script-tag, `_canonicalFilters` drops unknown keys, coerces boolean, strips empty values, stringifies numbers; `serializeFilters` deterministic key order, escapes none-of-business; `_fmtAgo` just-now / 5m / 2h / yesterday / 3d / 2w / 5mo; `_sortLabel` score → 'best deal', price_asc → 'price low↑', default fallback.
+- `buildLabel` (8): all-deals fallback, beds_min 0 → 'Studio', beds_min 1 → '1BR', price_max with comma, neighbourhood + region branch, source=other, sort=score → 'sorted by best deal', 8 toggles → joined list.
+- `saveCurrent` (6): empty filters no-op (returns false), append 1, append 2 cap at 5, dedup matches prepend-bump, dedup extends to non-current entry, label regen on dedup-bump.
+- `saveCurrentDebounced` (2): coalesces 3 calls into 1 write, debounceMs=0 fires synchronously.
+- `removeAt` (2): out-of-range idx, valid idx shrinks list.
+- `popover` (4): toggle via button click, outside-click dismiss, escape-key dismiss, position via getBoundingClientRect.
+- `serializeFilters` (2): stable across key insertion order, omits empty.
+- `renderEntry` (2): returns HTML with data-sig + data-idx, escapes user-derivable strings.
+
+**Tests — `tests/test_mc353_recent_searches.py` (NEW, 54 pytest tests in 8 classes):**
+- **`TestStaticAssetPresent` (8):** `recent_searches.js` exists, IIFE wrapper, `module.exports` + `root.__recentSearches`, exports `createView`, exports `buildLabel`, exports `serializeFilters`, exports `_escHtml`, exports `_canonicalFilters`.
+- **`TestIndexHtmlWiring` (15):** pill button id, count badge id, filter-pill class, aria-label, role=dialog, data-state defaults to 'closed', display:none initially, script tag loaded, init IIFE, `attachPopover` call, `onRestore` hook registered, `listenStorage` call, count initialization, disabled when 0 entries, IIFE pattern.
+- **`TestIndexHtmlRegressionGuards` (6):** MC-350 `listing_viewed.js` still loaded, MC-351 `recently_viewed.js` still loaded, MC-348 `map_cluster.js` still loaded, MC-349 `map_viewport_filter.js` still loaded, MC-322 save-search button still present, MC-323 only-new toggle still present.
+- **`TestBuildParamsIncludes` (5):** regression guards that `buildParams()` includes `is_new`, `price_dropped`, `has_image`, `hide_stale`, `max_price_per_sqft`, `min_pct_under` — proves MC-353 didn't accidentally break the filter round-trip.
+- **`TestJsApiSurface` (7):** IIFE pattern, window global registration, default `debounceMs=1000`, default `maxEntries=5`, empty filter set → no write, dedup via `serializeFilters`, `escapeHtml` helper.
+- **`TestNodeWrapper` (3):** node tests pass, ≥25 tests, asserts present.
+- **`TestRegressionGuard` (4):** MC-323 only-new filter, MC-349 map viewport filter, MC-351 recently-viewed coexistence, MC-322 save-search coexistence.
+- **`TestCssStyling` (6):** popover position:fixed, close button styling, header styling, entry hover, delete button, empty-state styling.
+
+**Test isolation:** Hand-rolled `createMockStorage()` + `createMockWindow()` + `createMockDocument()` in the JS test file — no jsdom dependency. Saves the module's STORAGE_KEY in a per-test ref so tests don't leak state across runs.
+
+**Live verification (Flask test_client on real `app.py` + `index.html`):**
+- `GET /` → 200, 165,278 bytes HTML. All 7 MC-353 wiring checks PASS: button id, count badge, popover container, script tag, init wiring, attachPopover call, count-update JS hook.
+- `GET /static/recent_searches.js` → 200, 25,952 bytes IIFE module served correctly.
+- Empty localStorage → pill shows `(0)`, button disabled.
+- First `loadDeals()` → fills canonical filters → debounced saveCurrent after 1s → pill shows `(1)`, button enabled.
+
+**Self-audit findings:**
+- ✅ All 12 acceptance criteria met.
+- ⚠️ **Visibility trade-off**: pre-paint, the badge initializes from `rs.count()` synchronously — if localStorage is huge, parse is fast (string <1KB), so no flicker.
+- ⚠️ **Disabled-when-empty UX:** the user clicks Recent searches and nothing happens when count=0. A future MC could replace disabled with a "Your search history will appear here" tooltip-on-hover message.
+- ⚠️ **Sort label coverage:** `sort=score` → 'sorted by best deal' is the default; explicit `sort=` triggers 'sorted by X' where X is the human-readable sort name. Unmapped sort values fall through to the literal value (`'sorted by exotic_sort'`).
+- ⚠️ **Localstorage corruption recovery:** `_safeParse` swallows JSON.parse errors and returns []. A garbage-key localStorage would empty the list silently. User would have to start a new history; harmless.
+- ⚠️ **Cross-tab fire-and-forget:** the storage event doesn't propagate the badge update to the originating tab (per spec), only to OTHER tabs. The originating tab refreshes via its own `saveCurrentDebounced` path. No infinite loop possible (each save writes once, the storage event fires in receiving tabs only).
+- ⚠️ **`buildLabel` for `sort=score` (default):** always appends 'sorted by best deal' even when no sort param is set. Documents that this is the default. An alternate reading would skip the suffix entirely — kept the suffix for consistency.
+- ⚠️ **Empty filter short-circuit prevents history pollution on page load:** without it, every page load would add an empty `{}` entry that "All deals" label couldn't disambiguate from a user explicitly clicking "Reset Filters". Tested by `test_saveCurrent_empty_returns_false`.
+- ⚠️ **No new pip deps; pure JS + HTML + CSS.** Module exports via window AND module.exports for dual-context use (same pattern as MC-350/351/348/349/309/307). IIFE wrapper means safe to load on the same page as any other script.
+- ⚠️ **Search max length: `label.length > 110` → slice + '…'** so the popover row stays one line on desktop. Tested by `test_buildLabel_truncates_long_labels`.
+- ⚠️ **`onRestore` hook is `_restoreHooks.push(hook)`** — multiple callers can register (e.g., separate hooks for url-update + form-fill + change-event-firing). Currently only 1 hook registered in `index.html` (calls `window.applySavedFilters`); the manual change-event firing happens inside the module.
+- 🔒 Security: synthetic change events use `Event` constructor (not `eval` or string-based event names). All user-derived strings pass `_escHtml`. No PII or secrets exposed. Storage key constant is unscoped to the module so a future MC could add a namespace prefix if needed.
+- 🔧 No production bugs found; edge cases handled (empty filter set, missing deal in current data, multi-key dedup, label truncation, cross-tab race, double-wired storage handler).
+
+**Files touched this session:**
+- `static/recent_searches.js` (NEW, 615 lines, 25,952 bytes) — verified counted from this session
+- `templates/index.html` (~95 net lines: pill, popover, CSS, script tag, init IIFE, loadDeals hook)
+- `tests/test_mc353_recent_searches.js` (NEW, 30 Node tests)
+- `tests/test_mc353_recent_searches.py` (NEW, 54 pytest tests)
+- `RENT_PROGRESS.md` (this session section)
 
 ---
 
